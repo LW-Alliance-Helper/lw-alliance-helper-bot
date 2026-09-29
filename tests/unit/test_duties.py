@@ -37,12 +37,14 @@ def test_open_slots_are_positions_not_holders():
     assert x.open_count(d.SLOT_BACKUP) == 1
 
 
-def test_anyone_in_leadership_backup_hides_the_stored_backups():
-    x = duty(primaries=(A,), backups=(B, d.OPEN), backup_anyone_leadership=True)
-    assert x.holders(d.SLOT_BACKUP) == ()
-    assert x.open_count(d.SLOT_BACKUP) == 0
-    assert x.all_holders() == (A,)
-    assert not x.holds(B)
+def test_anyone_in_leadership_sits_beside_named_people_in_either_slot():
+    x = duty(primaries=(A, d.ANYONE), backups=(B, d.ANYONE, d.OPEN))
+    assert x.holders(d.SLOT_PRIMARY) == (A,)
+    assert x.holders(d.SLOT_BACKUP) == (B,)
+    assert x.has_anyone(d.SLOT_PRIMARY) and x.has_anyone(d.SLOT_BACKUP)
+    assert x.open_count(d.SLOT_BACKUP) == 1
+    assert x.all_holders() == (A, B)
+    assert not x.holds(d.ANYONE)
 
 
 def test_all_holders_lists_someone_in_both_slots_once():
@@ -113,10 +115,12 @@ def test_paused_duties_count_and_are_broken_out():
     assert (load.backup, load.backup_paused, load.backup_active) == (1, 1, 0)
 
 
-def test_anyone_in_leadership_backups_count_toward_nobody():
-    xs = [duty(primaries=(A,), backups=(B,), backup_anyone_leadership=True)]
+def test_anyone_in_leadership_counts_toward_nobody():
+    xs = [duty(primaries=(A, d.ANYONE), backups=(d.ANYONE,))]
     loads = {x.user_id: x for x in d.workload(xs, [A, B])}
-    assert loads[B].backup == 0
+    assert loads[A].primary == 1
+    assert loads[B].primary == 0 and loads[B].backup == 0
+    assert d.ANYONE not in loads
 
 
 def test_a_holder_outside_leadership_still_appears_and_is_marked():
@@ -225,10 +229,10 @@ def test_dm_both_sends_once_to_someone_in_both_slots():
     assert got.channel_id == 0
 
 
-def test_anyone_in_leadership_backups_go_to_a_channel_not_every_dm():
-    x = duty(primaries=(A,), backups=(B,), backup_anyone_leadership=True)
+def test_anyone_in_leadership_goes_to_a_post_not_every_dm():
+    x = duty(primaries=(A,), backups=(B, d.ANYONE))
     got = d.plan_delivery(x, reminder(send_to=d.SEND_BOTH), leadership_channel_id=LEAD_CH)
-    assert got.dm_user_ids == (A,)
+    assert got.dm_user_ids == (A, B)
     assert got.channel_id == LEAD_CH
     assert not got.ping_leadership
 
@@ -237,7 +241,28 @@ def test_anyone_in_leadership_backups_go_to_a_channel_not_every_dm():
         reminder(send_to=d.SEND_BACKUPS, channel_id=777, ping_holders=True),
         leadership_channel_id=LEAD_CH,
     )
-    assert own == d.Delivery(channel_id=777, ping_leadership=True)
+    assert own == d.Delivery(dm_user_ids=(B,), channel_id=777, ping_leadership=True)
+
+    primaries_only = d.plan_delivery(
+        x, reminder(send_to=d.SEND_PRIMARIES), leadership_channel_id=LEAD_CH
+    )
+    assert primaries_only == d.Delivery(dm_user_ids=(A,))
+
+
+def test_a_primary_of_anyone_in_leadership_also_posts():
+    x = duty(primaries=(d.ANYONE,))
+    got = d.plan_delivery(x, reminder(send_to=d.SEND_PRIMARIES), leadership_channel_id=LEAD_CH)
+    assert got == d.Delivery(channel_id=LEAD_CH)
+
+
+def test_a_thread_post_is_delivered_like_a_channel_post():
+    x = duty(primaries=(A,), backups=(d.ANYONE,))
+    got = d.plan_delivery(
+        x,
+        reminder(send_to=d.SEND_THREAD, channel_id=888, ping_holders=True),
+        leadership_channel_id=LEAD_CH,
+    )
+    assert got == d.Delivery(channel_id=888, ping_user_ids=(A,), ping_leadership=True)
 
 
 def test_channel_post_pings_holders_only_when_asked():
@@ -268,10 +293,11 @@ def test_render_names_current_holders_and_survives_typos():
     assert out == f"Daily Schedule: <@{A}> (backup <@{B}>) {{nme}} {{"
 
 
-def test_render_anyone_in_leadership_backup():
-    x = duty(primaries=(A,), backups=(B,), backup_anyone_leadership=True)
-    r = reminder(message="{backup}")
-    assert d.render_reminder(r, x, name_of=_name, anyone_in_leadership="LEAD") == "LEAD"
+def test_render_anyone_in_leadership_among_named_people():
+    x = duty(primaries=(A, d.ANYONE), backups=(d.ANYONE,))
+    r = reminder(message="{primary} / {backup}")
+    out = d.render_reminder(r, x, name_of=_name, anyone_in_leadership="LEAD")
+    assert out == f"<@{A}>, LEAD / LEAD"
 
 
 @pytest.mark.parametrize(

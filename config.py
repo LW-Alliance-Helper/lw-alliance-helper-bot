@@ -7018,6 +7018,7 @@ _GUILD_REMOVAL_DELETES: tuple[tuple[str, str], ...] = (
     ("guild_extra_surveys", "guild_id = :gid"),
     ("guild_duties", "guild_id = :gid"),
     ("guild_duties_config", "guild_id = :gid"),
+    ("guild_duty_categories", "guild_id = :gid"),
     ("guild_duty_holders", "guild_id = :gid"),
     ("guild_duty_reminders", "guild_id = :gid"),
     ("guild_growth_config", "guild_id = :gid"),

@@ -206,6 +206,13 @@ def register_persistent_items(bot) -> None:
 # ── Opening a thread ─────────────────────────────────────────────────────────
 
 
+def _leadership_role(guild):
+    import config
+    from duties_hub import leadership_role
+
+    return leadership_role(guild, config.get_config(guild.id))
+
+
 def ticket_channel_problem(channel, member, me) -> str | None:
     """Why a thread opened under `channel` wouldn't work for `member`, as a
     `config_health` kind, or None if it would.
@@ -257,7 +264,12 @@ async def open_ticket(interaction: discord.Interaction, duty_id: int) -> None:
         await refresh_panel(interaction.client, guild.id)
         return
 
-    holders = [uid for uid in duty.all_holders() if guild.get_member(uid) is not None]
+    named = [uid for uid in duty.all_holders() if guild.get_member(uid) is not None]
+    role = _leadership_role(guild) if duty.any_anyone() else None
+    # "Anyone in leadership" holding the duty puts every leader in the
+    # thread, as named holders are.
+    leaders = [m.id for m in role.members if not m.bot] if role is not None else []
+    holders = list(dict.fromkeys(named + leaders))
     if not holders:
         await _reply(interaction, c.TICKET_NOBODY.format(duty=duty.name))
         return
@@ -274,12 +286,12 @@ async def open_ticket(interaction: discord.Interaction, duty_id: int) -> None:
         return
     _in_flight.add(key)
     try:
-        await _open(interaction, guild, duty, holders, key)
+        await _open(interaction, guild, duty, holders, key, named=named, role=role)
     finally:
         _in_flight.discard(key)
 
 
-async def _open(interaction, guild, duty: d.Duty, holders: list[int], key) -> None:
+async def _open(interaction, guild, duty: d.Duty, holders: list[int], key, *, named, role) -> None:
     settings = duties_db.get_settings(guild.id)
     channel_id = settings.ticket_channel_id or settings.panel_channel_id or interaction.channel_id
     channel = guild.get_channel(channel_id)
@@ -323,7 +335,12 @@ async def _open(interaction, guild, duty: d.Duty, holders: list[int], key) -> No
             logger.info("[DUTIES] guild=%s could not add %s to a thread: %s", guild.id, uid, e)
     try:
         await thread.send(
-            duties_render.thread_opener(duty, interaction.user.id, holders),
+            duties_render.thread_opener(
+                duty,
+                interaction.user.id,
+                named,
+                role_mention=role.mention if role is not None else "",
+            ),
             view=TicketCloseView(),
             allowed_mentions=_MENTION_USERS,
         )

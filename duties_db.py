@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from datetime import date, time
 
 import config
-from duties import OPEN, SLOT_BACKUP, SLOT_PRIMARY, Duty, DutyReminder
+from duties import ANYONE, OPEN, SLOT_BACKUP, SLOT_PRIMARY, Duty, DutyReminder
 
 
 class DuplicateDutyName(ValueError):
@@ -36,6 +36,15 @@ class DuplicateDutyName(ValueError):
     Names are how members pick a duty on the panel and how a ticket thread
     is titled, so two with the same name would be two buttons nobody can
     tell apart."""
+
+
+class DuplicateCategoryName(ValueError):
+    """Another category in this server already has this name
+    (case-insensitive). A category is picked from a list by name."""
+
+
+#: One select's worth: the duty modal offers categories as a dropdown.
+MAX_CATEGORIES = 25
 
 
 def create_tables(conn: sqlite3.Connection) -> None:
@@ -47,16 +56,27 @@ def create_tables(conn: sqlite3.Connection) -> None:
             id                       INTEGER PRIMARY KEY AUTOINCREMENT,
             guild_id                 INTEGER NOT NULL,
             name                     TEXT    NOT NULL COLLATE NOCASE,
-            category                 TEXT    NOT NULL DEFAULT '',
+            category_id              INTEGER NOT NULL DEFAULT 0,
             description              TEXT    NOT NULL DEFAULT '',
-            backup_anyone_leadership INTEGER NOT NULL DEFAULT 0,
             paused                   INTEGER NOT NULL DEFAULT 0,
             contact_enabled          INTEGER NOT NULL DEFAULT 0,
             sort_order               INTEGER NOT NULL DEFAULT 0,
             UNIQUE (guild_id, name)
         )
     """)
-    # One row per slot. `user_id = 0` is an open slot (`duties.OPEN`), so a
+    # Categories are a managed list, picked from a dropdown, so a typo can't
+    # split one group into two. Deleting one leaves its duties uncategorized.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS guild_duty_categories (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id   INTEGER NOT NULL,
+            name       TEXT    NOT NULL COLLATE NOCASE,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            UNIQUE (guild_id, name)
+        )
+    """)
+    # One row per slot. `user_id = 0` is an open slot (`duties.OPEN`) and
+    # `-1` is "anyone in leadership" (`duties.ANYONE`), so a
     # holder leaving turns their row open in place and the position keeps
     # its order. `guild_id` is repeated here so the server removal and the
     # guild-scoped-table schema test reach it without a join.
@@ -142,22 +162,31 @@ def _duty_from_row(row: sqlite3.Row, holders: dict[str, list[int]] | None) -> Du
         id=row["id"],
         guild_id=row["guild_id"],
         name=row["name"],
-        category=row["category"],
+        category=row["category_name"] or "",
+        category_id=row["category_id"] if row["category_name"] is not None else 0,
         description=row["description"],
         primaries=tuple(holders.get(SLOT_PRIMARY, ())),
         backups=tuple(holders.get(SLOT_BACKUP, ())),
-        backup_anyone_leadership=bool(row["backup_anyone_leadership"]),
         paused=bool(row["paused"]),
         contact_enabled=bool(row["contact_enabled"]),
         sort_order=row["sort_order"],
     )
 
 
+_DUTY_SELECT = (
+    "SELECT d.*, c.name AS category_name, c.sort_order AS category_order "
+    "FROM guild_duties d LEFT JOIN guild_duty_categories c "
+    "ON c.id = d.category_id AND c.guild_id = d.guild_id "
+)
+
+
 def list_duties(guild_id: int) -> list[Duty]:
-    """Every duty in the server, in leadership's order."""
+    """Every duty in the server: grouped by category in the categories'
+    order, uncategorized last, and in leadership's order within each."""
     with config._get_conn() as conn:
         rows = conn.execute(
-            "SELECT * FROM guild_duties WHERE guild_id = ? ORDER BY sort_order, id",
+            _DUTY_SELECT + "WHERE d.guild_id = ? "
+            "ORDER BY c.id IS NULL, c.sort_order, c.id, d.sort_order, d.id",
             (guild_id,),
         ).fetchall()
         holders = _holders_by_duty(conn, guild_id)
@@ -167,7 +196,7 @@ def list_duties(guild_id: int) -> list[Duty]:
 def get_duty(guild_id: int, duty_id: int) -> Duty | None:
     with config._get_conn() as conn:
         row = conn.execute(
-            "SELECT * FROM guild_duties WHERE guild_id = ? AND id = ?", (guild_id, duty_id)
+            _DUTY_SELECT + "WHERE d.guild_id = ? AND d.id = ?", (guild_id, duty_id)
         ).fetchone()
         if row is None:
             return None
@@ -190,9 +219,6 @@ def save_duty(duty: Duty) -> int:
     """Insert (`duty.id == 0`) or update a duty and its holders, all in one
     transaction. Returns the duty's id.
 
-    The backup list is stored even while `backup_anyone_leadership` is set,
-    so switching back to named backups restores who they were.
-
     Raises `DuplicateDutyName` if another duty in the server has the name.
     """
     name = duty.name.strip()
@@ -200,9 +226,8 @@ def save_duty(duty: Duty) -> int:
         raise ValueError("a duty needs a name")
     values = (
         name,
-        duty.category.strip(),
+        int(duty.category_id),
         duty.description.strip(),
-        int(duty.backup_anyone_leadership),
         int(duty.paused),
         int(duty.contact_enabled),
         int(duty.sort_order),
@@ -211,8 +236,8 @@ def save_duty(duty: Duty) -> int:
         with config._get_conn() as conn:
             if duty.id:
                 cur = conn.execute(
-                    "UPDATE guild_duties SET name = ?, category = ?, description = ?, "
-                    "backup_anyone_leadership = ?, paused = ?, contact_enabled = ?, "
+                    "UPDATE guild_duties SET name = ?, category_id = ?, description = ?, "
+                    "paused = ?, contact_enabled = ?, "
                     "sort_order = ? WHERE guild_id = ? AND id = ?",
                     (*values, duty.guild_id, duty.id),
                 )
@@ -221,9 +246,9 @@ def save_duty(duty: Duty) -> int:
                 duty_id = duty.id
             else:
                 cur = conn.execute(
-                    "INSERT INTO guild_duties (name, category, description, "
-                    "backup_anyone_leadership, paused, contact_enabled, sort_order, guild_id) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO guild_duties (name, category_id, description, "
+                    "paused, contact_enabled, sort_order, guild_id) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (*values, duty.guild_id),
                 )
                 duty_id = int(cur.lastrowid)
@@ -234,6 +259,88 @@ def save_duty(duty: Duty) -> int:
             raise DuplicateDutyName(name) from exc
         raise
     return duty_id
+
+
+# ── Categories ───────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class Category:
+    id: int
+    guild_id: int
+    name: str
+    sort_order: int = 0
+    #: How many duties are in it, filled by `list_categories`.
+    duty_count: int = 0
+
+
+def list_categories(guild_id: int) -> list[Category]:
+    with config._get_conn() as conn:
+        rows = conn.execute(
+            "SELECT c.*, (SELECT COUNT(*) FROM guild_duties d "
+            "  WHERE d.guild_id = c.guild_id AND d.category_id = c.id) AS n "
+            "FROM guild_duty_categories c WHERE c.guild_id = ? ORDER BY c.sort_order, c.id",
+            (guild_id,),
+        ).fetchall()
+    return [Category(r["id"], r["guild_id"], r["name"], r["sort_order"], r["n"]) for r in rows]
+
+
+def save_category(guild_id: int, name: str, category_id: int = 0) -> int:
+    """Add (`category_id == 0`) or rename a category. Returns its id.
+
+    Raises `DuplicateCategoryName`, `ValueError` for a blank name, and
+    `LookupError` past `MAX_CATEGORIES` or for a missing id."""
+    name = name.strip()
+    if not name:
+        raise ValueError("a category needs a name")
+    try:
+        with config._get_conn() as conn:
+            if category_id:
+                cur = conn.execute(
+                    "UPDATE guild_duty_categories SET name = ? WHERE guild_id = ? AND id = ?",
+                    (name, guild_id, category_id),
+                )
+                if cur.rowcount == 0:
+                    raise LookupError(f"no category {category_id} in guild {guild_id}")
+                new_id = category_id
+            else:
+                count, top = conn.execute(
+                    "SELECT COUNT(*), COALESCE(MAX(sort_order), -1) "
+                    "FROM guild_duty_categories WHERE guild_id = ?",
+                    (guild_id,),
+                ).fetchone()
+                if count >= MAX_CATEGORIES:
+                    raise LookupError("category limit reached")
+                cur = conn.execute(
+                    "INSERT INTO guild_duty_categories (guild_id, name, sort_order) "
+                    "VALUES (?, ?, ?)",
+                    (guild_id, name, top + 1),
+                )
+                new_id = int(cur.lastrowid)
+            conn.commit()
+    except sqlite3.IntegrityError as exc:
+        if "UNIQUE" in str(exc):
+            raise DuplicateCategoryName(name) from exc
+        raise
+    return new_id
+
+
+def delete_category(guild_id: int, category_id: int) -> int | None:
+    """Delete a category. Its duties stay, uncategorized. Returns how many
+    duties that touched, or None if there was no such category."""
+    with config._get_conn() as conn:
+        n = conn.execute(
+            "DELETE FROM guild_duty_categories WHERE guild_id = ? AND id = ?",
+            (guild_id, category_id),
+        ).rowcount
+        if not n:
+            return None
+        moved = conn.execute(
+            "UPDATE guild_duties SET category_id = 0 WHERE guild_id = ? AND category_id = ?",
+            (guild_id, category_id),
+        ).rowcount
+        conn.commit()
+    return moved
 
 
 def set_duty_paused(guild_id: int, duty_id: int, paused: bool) -> bool:
@@ -274,7 +381,7 @@ def vacate_holder(guild_id: int, user_id: int, name: str = "") -> list[str]:
     who left it (`name` is how they were known, since they can't be looked
     up once gone). Returns the names of the duties that changed. An empty
     list means they held nothing."""
-    if user_id == OPEN:
+    if user_id in (OPEN, ANYONE):
         return []
     with config._get_conn() as conn:
         rows = conn.execute(

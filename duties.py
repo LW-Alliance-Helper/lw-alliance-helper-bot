@@ -37,38 +37,49 @@ SLOTS = (SLOT_PRIMARY, SLOT_BACKUP)
 #: chose survives), and so "Primary: 2 of 3 filled" needs no second field.
 OPEN = 0
 
+#: The id stored for "anyone in leadership": the Leadership role from
+#: `/setup`, as one of a slot's choices beside named people ("Bravo,
+#: Charlie, anyone in leadership"). Either slot can hold it. Never a real
+#: user id, so it is never DMed, counted in the workload, or vacated.
+ANYONE = -1
+
 
 @dataclass(frozen=True)
 class Duty:
     id: int
     guild_id: int
     name: str
+    #: The category's name, filled in on read for display. What is stored
+    #: is `category_id`; categories are a managed list, not free text.
     category: str = ""
     description: str = ""
     #: Discord user ids in the order leadership set them; `OPEN` is an open
-    #: slot.
+    #: position and `ANYONE` is "anyone in leadership".
     primaries: tuple[int, ...] = ()
     backups: tuple[int, ...] = ()
-    #: Backup is "anyone in leadership" (the Leadership role from `/setup`)
-    #: rather than named people. `backups` is ignored while this is set.
-    backup_anyone_leadership: bool = False
     #: The `/events` Pause idea: the duty stays listed, marked paused, its
     #: reminders stop and every setting is kept.
     paused: bool = False
     #: Members get a button for this duty on the contact panel.
     contact_enabled: bool = False
     sort_order: int = 0
+    #: 0 = no category.
+    category_id: int = 0
 
     def slot(self, kind: str) -> tuple[int, ...]:
         if kind == SLOT_PRIMARY:
             return self.primaries
         if kind == SLOT_BACKUP:
-            return () if self.backup_anyone_leadership else self.backups
+            return self.backups
         raise ValueError(f"unknown slot kind {kind!r}")
 
     def holders(self, kind: str) -> tuple[int, ...]:
-        """The people actually holding `kind`, open slots left out."""
-        return tuple(uid for uid in self.slot(kind) if uid != OPEN)
+        """The people named in `kind`: no open positions, no "anyone"."""
+        return tuple(uid for uid in self.slot(kind) if uid not in (OPEN, ANYONE))
+
+    def has_anyone(self, kind: str) -> bool:
+        """Whether "anyone in leadership" is one of `kind`'s choices."""
+        return ANYONE in self.slot(kind)
 
     def open_count(self, kind: str) -> int:
         return sum(1 for uid in self.slot(kind) if uid == OPEN)
@@ -80,8 +91,11 @@ class Duty:
             seen.setdefault(uid, None)
         return tuple(seen)
 
+    def any_anyone(self) -> bool:
+        return self.has_anyone(SLOT_PRIMARY) or self.has_anyone(SLOT_BACKUP)
+
     def holds(self, user_id: int) -> bool:
-        return user_id != OPEN and user_id in self.all_holders()
+        return user_id not in (OPEN, ANYONE) and user_id in self.all_holders()
 
 
 def vacate(duty: Duty, user_id: int) -> Duty:
@@ -228,7 +242,12 @@ SEND_PRIMARIES = "primaries"
 SEND_BACKUPS = "backups"
 SEND_BOTH = "both"
 SEND_CHANNEL = "channel"
-SEND_TARGETS = (SEND_PRIMARIES, SEND_BACKUPS, SEND_BOTH, SEND_CHANNEL)
+#: A thread as the destination, the bot's 📢 / 🧵 pair. Delivered exactly
+#: like a channel post; kept separate so the editor knows which picker to
+#: show and the list says which it is.
+SEND_THREAD = "thread"
+SEND_TARGETS = (SEND_PRIMARIES, SEND_BACKUPS, SEND_BOTH, SEND_CHANNEL, SEND_THREAD)
+POST_TARGETS = (SEND_CHANNEL, SEND_THREAD)
 
 
 @dataclass(frozen=True)
@@ -252,12 +271,11 @@ class DutyReminder:
     #: Monday = 0, as `date.weekday()`.
     weekdays: frozenset[int] = field(default_factory=frozenset)
     send_to: str = SEND_PRIMARIES
-    #: The post channel for `SEND_CHANNEL`, and where backup reminders go
-    #: when the backup is "anyone in leadership". 0 = not set.
+    #: The channel or thread for a post, and where the "anyone in
+    #: leadership" half of a DM reminder goes. 0 = not set.
     channel_id: int = 0
-    #: Ping whoever the reminder is for when it posts in a channel: the
-    #: named holders, or the Leadership role for an "anyone in leadership"
-    #: backup.
+    #: Ping whoever the reminder is for when it posts: the named holders,
+    #: and the Leadership role where "anyone in leadership" is a choice.
     ping_holders: bool = False
     enabled: bool = True
     #: The occurrence date this last fired for, in the guild's calendar: the
@@ -317,13 +335,12 @@ class Delivery:
     """Where one firing of a reminder goes."""
 
     dm_user_ids: tuple[int, ...] = ()
-    #: 0 = no channel post.
+    #: 0 = no post.
     channel_id: int = 0
-    #: Holders to mention in the channel post.
+    #: Holders to mention in the post.
     ping_user_ids: tuple[int, ...] = ()
-    #: Mention the Leadership role in the channel post: the backup is
-    #: "anyone in leadership", the reminder was meant for backups, and it
-    #: asked to ping.
+    #: Mention the Leadership role in the post: "anyone in leadership" is one
+    #: of the choices the reminder is for, and it asked to ping.
     ping_leadership: bool = False
 
 
@@ -331,42 +348,35 @@ def plan_delivery(duty: Duty, reminder: DutyReminder, *, leadership_channel_id: 
     """Resolve a reminder's destination against the duty's current holders.
 
     Reads the holders at fire time, so a reminder follows the duty when it
-    changes hands. When the backup is "anyone in leadership", the backup
-    half goes to a channel (the reminder's own, else the leadership
-    channel) and never to every leader's DMs.
+    changes hands. Named holders are DMed; where "anyone in leadership" is
+    one of a wanted slot's choices, that half goes to a post (the
+    reminder's own channel, else the leadership channel) and never to every
+    leader's DMs.
     """
-    primaries = duty.holders(SLOT_PRIMARY)
-    backups = duty.holders(SLOT_BACKUP)
-
-    if reminder.send_to == SEND_CHANNEL:
-        # A channel post is for everyone on the duty, so the ping is too,
-        # which for an "anyone in leadership" backup means the role.
+    if reminder.send_to in POST_TARGETS:
+        # A post is for everyone on the duty, so the ping is too, which for
+        # "anyone in leadership" means the role.
         return Delivery(
             channel_id=reminder.channel_id,
             ping_user_ids=duty.all_holders() if reminder.ping_holders else (),
-            ping_leadership=reminder.ping_holders and duty.backup_anyone_leadership,
+            ping_leadership=reminder.ping_holders and duty.any_anyone(),
         )
 
-    wants_primary = reminder.send_to in (SEND_PRIMARIES, SEND_BOTH)
-    wants_backup = reminder.send_to in (SEND_BACKUPS, SEND_BOTH)
+    wanted = []
+    if reminder.send_to in (SEND_PRIMARIES, SEND_BOTH):
+        wanted.append(SLOT_PRIMARY)
+    if reminder.send_to in (SEND_BACKUPS, SEND_BOTH):
+        wanted.append(SLOT_BACKUP)
 
     dms: dict[int, None] = {}
-    if wants_primary:
-        dms.update(dict.fromkeys(primaries))
-    channel_id = 0
-    ping_leadership = False
-    if wants_backup:
-        if duty.backup_anyone_leadership:
-            channel_id = reminder.channel_id or leadership_channel_id
-            # The reminder's own ping toggle, pointed at the people this
-            # half is for: the whole role.
-            ping_leadership = reminder.ping_holders
-        else:
-            dms.update(dict.fromkeys(backups))
+    anyone = False
+    for kind in wanted:
+        dms.update(dict.fromkeys(duty.holders(kind)))
+        anyone = anyone or duty.has_anyone(kind)
     return Delivery(
         dm_user_ids=tuple(dms),
-        channel_id=channel_id,
-        ping_leadership=ping_leadership,
+        channel_id=(reminder.channel_id or leadership_channel_id) if anyone else 0,
+        ping_leadership=anyone and reminder.ping_holders,
     )
 
 
@@ -387,12 +397,15 @@ def render_reminder(
 
     `name_of` turns a user id into however this destination shows a person
     (a mention in a channel, a display name in a DM). `anyone_in_leadership`
-    is what `{backup}` says when the backup is the whole Leadership role.
+    is how "anyone in leadership" reads when it is one of a slot's choices.
     Open slots are left out; a slot with nobody in it renders as nothing.
     """
-    primary = ", ".join(name_of(uid) for uid in duty.holders(SLOT_PRIMARY))
-    if duty.backup_anyone_leadership:
-        backup = anyone_in_leadership
-    else:
-        backup = ", ".join(name_of(uid) for uid in duty.holders(SLOT_BACKUP))
+
+    def who(kind: str) -> str:
+        names = [name_of(uid) for uid in duty.holders(kind)]
+        if duty.has_anyone(kind):
+            names.append(anyone_in_leadership)
+        return ", ".join(names)
+
+    primary, backup = who(SLOT_PRIMARY), who(SLOT_BACKUP)
     return template_render.render(reminder.message, duty=duty.name, primary=primary, backup=backup)

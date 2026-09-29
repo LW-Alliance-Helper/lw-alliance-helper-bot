@@ -34,6 +34,7 @@ BTN_WORKLOAD = "⚖️ Workload"
 BTN_MY_DUTIES = "👤 My duties"
 BTN_REMINDERS = "🔔 Reminders"
 BTN_CONTACT = "⚙️ Contact settings"
+BTN_CATEGORIES = "🏷️ Categories"
 
 #: The route back from anything opened off the hub.
 HUB_ROUTE = f"`{DUTIES_CMD}`"
@@ -102,7 +103,11 @@ MODAL_EDIT_TITLE = "Edit a duty"
 FIELD_NAME = "Duty name"
 FIELD_NAME_PLACEHOLDER = "e.g. Member disputes"
 FIELD_CATEGORY = "Category"
-FIELD_CATEGORY_PLACEHOLDER = "e.g. Members, VS, Events"
+FIELD_CATEGORY_PLACEHOLDER = "No category"
+DUTY_NO_CATEGORIES = (
+    f"ℹ️ No categories yet. To group your duties, add some from **{BTN_CATEGORIES}** "
+    f"in `{DUTIES_CMD}`."
+)
 FIELD_DESCRIPTION = "Description"
 FIELD_DESCRIPTION_PLACEHOLDER = (
     "What it covers. Members see this on the contact buttons if you turn them on."
@@ -115,7 +120,9 @@ EDITOR_CONTACT_OFF = "**Members can contact:** ❌ off"
 EDITOR_UNSAVED = "Nothing is saved until you click **💾 Save**."
 EDITOR_PH_PRIMARY = "Primary holders"
 EDITOR_PH_BACKUP = "Backup holders"
-EDITOR_PH_BACKUP_ANYONE = "Backup is anyone in leadership"
+#: The "anyone in leadership" choice in both holder pickers (item 3).
+EDITOR_ANYONE_OPTION = "Anyone in leadership"
+EDITOR_ANYONE_OPTION_DESC = "Everyone with your leadership role"
 EDITOR_PH_OPEN_PRIMARY = "Open primary positions"
 EDITOR_PH_OPEN_BACKUP = "Open backup positions"
 EDITOR_OPEN_OPTION = (
@@ -124,9 +131,7 @@ EDITOR_OPEN_OPTION = (
     "{n} open {kind} positions",
 )
 
-BTN_NAME_AND_DESCRIPTION = "✏️ Name and description"
-BTN_BACKUP_ANYONE = "🔀 Backup: anyone in leadership"
-BTN_BACKUP_NAMED = "🔀 Backup: named people"
+BTN_NAME_AND_DESCRIPTION = "✏️ Name, category and description"
 BTN_CONTACT_ON = "Turn contact on"
 BTN_CONTACT_OFF = "Turn contact off"
 BTN_SAVE = "💾 Save"
@@ -143,6 +148,33 @@ CONTACT_FULL = (
     "⚠️ The contact buttons hold {cap} duties at most, and {cap} already have them. "
     "Turn contact off on another duty first."
 )
+
+# ── Categories ───────────────────────────────────────────────────────────────
+
+CATEGORIES_TITLE = BTN_CATEGORIES
+CATEGORIES_INTRO = "Group your duties. Each duty picks one from a list when you add or edit it."
+CATEGORIES_NONE = "ℹ️ No categories yet. Click **➕ Add** to make one."
+CATEGORY_ROW = "• **{name}**: {n}"
+CATEGORY_COUNT = ("no duties", "1 duty", "{n} duties")
+CATEGORY_PICK_PLACEHOLDER = "Pick a category…"
+BTN_CATEGORY_ADD = "➕ Add"
+BTN_CATEGORY_EDIT = "✏️ Edit"
+BTN_CATEGORY_DELETE = "🗑️ Delete"
+MODAL_CATEGORY_ADD = "Add a category"
+MODAL_CATEGORY_EDIT = "Edit a category"
+FIELD_CATEGORY_NAME = "Category name"
+FIELD_CATEGORY_NAME_PLACEHOLDER = "e.g. Members"
+CATEGORY_ADDED = "✅ Added **{name}**."
+CATEGORY_RENAMED = "✅ Renamed **{old}** to **{name}**."
+CATEGORY_DUPLICATE = "⚠️ You already have a category called **{name}**."
+CATEGORIES_FULL = "⚠️ You can have up to {cap} categories. Delete one to add another."
+CATEGORY_DELETE_CONFIRM = "🗑️ **{name}** will be deleted.{moved} This can't be undone."
+CATEGORY_DELETE_MOVED = (
+    "",
+    " Its duty moves to {other}.",
+    " Its {n} duties move to {other}.",
+)
+CATEGORY_DELETED = "🗑️ Deleted **{name}**."
 
 # ── Pause, delete ────────────────────────────────────────────────────────────
 
@@ -180,8 +212,8 @@ REMINDER_PING_OFF = "**Ping:** ❌ off"
 REMINDER_PREVIEW_FIELD = "Preview"
 REMINDER_NO_MESSAGE = "*No message yet.*"
 REMINDER_ANYONE_NOTE = (
-    "ℹ️ The backup for this duty is anyone in leadership, so backup reminders "
-    "post in {channel} rather than going to every leader's DMs."
+    "ℹ️ Anyone in leadership holds this duty, so their reminders post in "
+    "{channel} rather than going to every leader's DMs."
 )
 REMINDER_PLACEHOLDER_HELP = (
     "Write `{primary}`, `{backup}` or `{duty}` and I'll fill in whoever holds it when it sends."
@@ -210,9 +242,14 @@ SEND_PRIMARIES = "DM the primaries"
 SEND_BACKUPS = "DM the backups"
 SEND_BOTH = "DM primaries and backups"
 SEND_CHANNEL = "Post in a channel"
+SEND_THREAD = "Post in a thread"
 DEST_CHANNEL = "{channel}"
 DEST_NO_CHANNEL = "a channel (not picked yet)"
+DEST_NO_THREAD = "a thread (not picked yet)"
 CHANNEL_PH = "Channel to post in"
+THREAD_PH = "Pick a thread…"
+THREAD_OPTION = "{thread} (in #{parent})"
+THREAD_NONE_OPEN = "No open threads to pick"
 
 BTN_MESSAGE_AND_TIME = "✏️ Message and time"
 BTN_PING_ON = "Turn ping on"
@@ -236,6 +273,7 @@ NEEDS_TIME = f"⚠️ The reminder needs a time. Click **{BTN_MESSAGE_AND_TIME}*
 NEEDS_DAYS = "⚠️ Pick at least one weekday."
 NEEDS_INTERVAL = f"⚠️ Set how often and from when with **{BTN_MESSAGE_AND_TIME}**."
 NEEDS_CHANNEL = "⚠️ Pick a channel to post in."
+NEEDS_THREAD = "⚠️ Pick a thread to post in."
 REMINDER_SAVED = "✅ Saved the reminder for **{name}**."
 
 # ── Sent reminders ───────────────────────────────────────────────────────────
@@ -290,8 +328,8 @@ WARN_NO_MEMBER_ROLE = (
 
 PANEL_TITLE = "🪪 Who handles what"
 PANEL_INTRO = (
-    "Click a button to open a private thread with the people who handle it. "
-    "Write your message there and they'll pick it up."
+    "Select the option you need to contact someone about that specific duty. "
+    "A private thread will be created for you to confidentially message leadership."
 )
 PANEL_EMPTY = "ℹ️ There's nobody to contact here right now."
 PANEL_HELD_BY = "Handled by {who}"
@@ -336,20 +374,21 @@ HOLDER_LEFT_DETAIL = "**{name}** left the server. {their} {duties} now {have} an
 HELP_EMOJI = "🪪"
 HELP_LABEL = FEATURE_NAME
 HELP_DESCRIPTION = (
-    "💎 Premium. Record the standing duties your leadership team splits between "
-    "you, who holds each one, and how evenly they're spread. Remind holders in "
-    "your own words, and let members open a private thread with the right people."
+    "💎 Premium. Record the duties your leadership team handles, including who "
+    "handles each one and see how much your team is taking on. You can remind "
+    "your team members about their duties and allow your members to open a "
+    "private thread with the right people."
 )
 HELP_COMMANDS = (
     (
         DUTIES_CMD,
-        "**Duties hub.** Add and edit duties (primary and backup holders, open "
-        "positions), pause one for Season, and see the workload and your own duties.",
+        "**Duties hub.** Add and edit duties, manage primary, backup, and open "
+        "positions, pause duties, and see the workload for each team member.",
     ),
     (
         f"{DUTIES_CMD} → {BTN_REMINDERS}",
-        "Reminders you write yourself for each duty, by DM or in a channel, on "
-        "chosen weekdays or every few days.",
+        "Reminders you write yourself for each duty, sent by DM, in a channel or "
+        "in a thread, on the weekdays you pick or every few days.",
     ),
     (
         f"{DUTIES_CMD} → {BTN_CONTACT}",

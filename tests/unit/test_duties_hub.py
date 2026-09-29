@@ -85,7 +85,7 @@ def test_premium_hub_is_all_live():
 def test_empty_premium_hub_offers_only_what_can_change_something():
     buttons = _buttons(_hub(r.STATE_PREMIUM, []))
     live = {label for label, b in buttons.items() if not b.disabled}
-    assert live == {c.BTN_ADD, c.BTN_CONTACT}
+    assert live == {c.BTN_ADD, c.BTN_CONTACT, c.BTN_CATEGORIES}
 
 
 def test_a_lapsed_hub_is_read_only_but_can_still_be_viewed():
@@ -135,14 +135,50 @@ async def test_setting_open_positions():
     assert view.draft.primaries == (A, d.OPEN, d.OPEN)
 
 
-async def test_anyone_in_leadership_disables_the_backup_pickers():
-    view = _editor(backups=(B,))
-    await _buttons(view)[c.BTN_BACKUP_ANYONE].callback(_inter())
-    assert view.draft.backup_anyone_leadership
-    selects = _selects(view)
-    assert selects[1].disabled and selects[3].disabled
-    assert selects[1].placeholder == c.EDITOR_PH_BACKUP_ANYONE
-    assert c.BTN_BACKUP_NAMED in _buttons(view)
+def _leaders(*pairs):
+    role = MagicMock()
+    role.members = [MagicMock(id=uid, display_name=name, bot=False) for uid, name in pairs]
+    return role
+
+
+def _editor_with_leaders(role, **kw):
+    kw.setdefault("name", "Disputes")
+    hub = _fake_hub()
+    # Charlie is in the server but not in the leadership role.
+    hub.guild.get_member = lambda uid: MagicMock(display_name="Charlie") if uid == C else None
+    with (
+        patch("duties_hub.leadership_role", return_value=role),
+        patch("config.get_config", return_value=None),
+    ):
+        return h.DutyEditorView(hub, d.Duty(id=0, guild_id=G, **kw))
+
+
+async def test_holder_pickers_offer_leaders_and_anyone_in_leadership():
+    role = _leaders((B, "Bravo"), (A, "Alpha"))
+    view = _editor_with_leaders(role, primaries=(B,), backups=(d.ANYONE,))
+    primary, backup = _selects(view)[:2]
+    for select in (primary, backup):
+        assert [o.label for o in select.options] == ["Alpha", "Bravo", c.EDITOR_ANYONE_OPTION]
+    assert [o.default for o in primary.options] == [False, True, False]
+    assert [o.default for o in backup.options] == [False, False, True]
+
+    primary._values = [str(A), str(d.ANYONE)]
+    with (
+        patch("duties_hub.leadership_role", return_value=role),
+        patch("config.get_config", return_value=None),
+    ):
+        await primary.callback(_inter())
+    assert view.draft.primaries == (A, d.ANYONE)
+
+
+def test_a_holder_outside_leadership_stays_offered():
+    view = _editor_with_leaders(_leaders((A, "Alpha")), primaries=(C,))
+    assert [o.value for o in _selects(view)[0].options] == [str(A), str(C), str(d.ANYONE)]
+
+
+def test_without_a_leadership_role_the_user_picker_is_used():
+    view = _editor_with_leaders(None, primaries=(A,))
+    assert isinstance(_selects(view)[0], discord.ui.UserSelect)
 
 
 async def test_save_adds_the_duty_and_refreshes(temp_db):
@@ -211,10 +247,23 @@ def _reminder_editor(duty_kw=None, **draft_kw):
     draft_kw.setdefault("schedule_type", d.SCHEDULE_WEEKDAYS)
     draft_kw.setdefault("at", None)
     draft = d.DutyReminder(id=0, guild_id=G, duty_id=1, **draft_kw)
-    with patch("config.get_config", return_value=None):
+    with (
+        patch("config.get_config", return_value=None),
+        patch("wizard_steps.ChannelSelectStep._collect_pickable_threads", return_value=[])
+        if draft_kw.get("send_to") != d.SEND_THREAD
+        else _nullctx(),
+    ):
         view = h.ReminderEditorView(parent, draft)
         view.render()
     return view
+
+
+class _nullctx:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
 
 
 def test_a_blank_reminder_lists_what_it_needs():
@@ -230,9 +279,28 @@ def test_the_channel_picker_shows_only_when_it_is_used():
 
     assert not has_channel_select(_reminder_editor(send_to=d.SEND_PRIMARIES))
     assert has_channel_select(_reminder_editor(send_to=d.SEND_CHANNEL))
-    assert has_channel_select(
-        _reminder_editor({"backup_anyone_leadership": True}, send_to=d.SEND_BACKUPS)
+    assert has_channel_select(_reminder_editor({"backups": (d.ANYONE,)}, send_to=d.SEND_BACKUPS))
+    assert not has_channel_select(
+        _reminder_editor({"backups": (d.ANYONE,)}, send_to=d.SEND_PRIMARIES)
     )
+
+
+def test_a_thread_reminder_offers_open_threads():
+    thread = MagicMock()
+    thread.id, thread.name = 77, "weekly-plans"
+    thread.parent.name = "leadership"
+    with patch("wizard_steps.ChannelSelectStep._collect_pickable_threads", return_value=[thread]):
+        view = _reminder_editor(send_to=d.SEND_THREAD)
+    (picker,) = [x for x in view.children if getattr(x, "placeholder", None) == c.THREAD_PH]
+    assert [o.label for o in picker.options] == ["weekly-plans (in #leadership)"]
+    assert view.problems()[-1] == c.NEEDS_THREAD
+
+
+def test_no_open_threads_says_so():
+    with patch("wizard_steps.ChannelSelectStep._collect_pickable_threads", return_value=[]):
+        view = _reminder_editor(send_to=d.SEND_THREAD)
+    (picker,) = [x for x in view.children if getattr(x, "placeholder", None) == c.THREAD_NONE_OPEN]
+    assert picker.disabled
 
 
 async def test_save_returns_to_the_list(temp_db):
@@ -461,3 +529,60 @@ async def test_saving_without_a_post_just_saves(temp_db):
         await _buttons(view)[c.BTN_SAVE].callback(_inter())
     post.assert_not_awaited()
     assert db.get_settings(G).panel_channel_id == 700
+
+
+# ── Categories ───────────────────────────────────────────────────────────────
+
+
+def test_the_duty_modal_offers_the_categories():
+    cats = [db.Category(1, G, "Members"), db.Category(2, G, "VS")]
+    duty = d.Duty(id=5, guild_id=G, name="X", category_id=2)
+    modal = h.DutyDetailsModal(c.MODAL_EDIT_TITLE, duty, cats, AsyncMock())
+    label = modal.category_label
+    assert label.text == c.FIELD_CATEGORY
+    assert [(o.label, o.default) for o in label.component.options] == [
+        ("Members", False),
+        ("VS", True),
+    ]
+    label.component._values = ["1"]
+    assert modal.picked_category().name == "Members"
+    label.component._values = []
+    assert modal.picked_category() is None
+
+
+def test_with_no_categories_the_modal_points_to_them():
+    modal = h.DutyDetailsModal(c.MODAL_ADD_TITLE, None, [], AsyncMock())
+    assert modal.category_label is None
+    texts = [x.content for x in modal.children if isinstance(x, discord.ui.TextDisplay)]
+    assert texts == [c.DUTY_NO_CATEGORIES]
+
+
+async def test_the_category_manager_adds_and_refuses_duplicates(temp_db):
+    hub = _fake_hub()
+    hub.refresh = AsyncMock()
+    view = h.CategoryManagerView(hub)
+    view.render()
+    inter = _inter()
+    await _buttons(view)[c.BTN_CATEGORY_ADD].callback(inter)
+    modal = inter.response.send_modal.await_args.args[0]
+    modal.name_input._value = "Members"
+    done = _inter()
+    await modal.on_submit(done)
+    assert done.response.edit_message.await_args.kwargs["content"] == c.CATEGORY_ADDED.format(
+        name="Members"
+    )
+    assert [x.name for x in db.list_categories(G)] == ["Members"]
+
+    again = _inter()
+    await modal.on_submit(again)
+    again.response.send_message.assert_awaited_once_with(
+        c.CATEGORY_DUPLICATE.format(name="Members"), ephemeral=True
+    )
+
+
+def test_category_delete_confirm_says_where_duties_go():
+    assert r.category_delete_confirm("VS", 2) == (
+        f"🗑️ **VS** will be deleted. Its 2 duties move to **{c.HUB_NO_CATEGORY}**. "
+        "This can't be undone."
+    )
+    assert r.category_delete_confirm("VS", 0) == "🗑️ **VS** will be deleted. This can't be undone."

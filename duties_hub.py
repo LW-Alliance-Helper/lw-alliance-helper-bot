@@ -93,7 +93,7 @@ def reconcile_departed(bot, guild: discord.Guild) -> bool:
     seen: set[int] = set()
     for duty in duties_db.list_duties(guild.id):
         for uid in duty.primaries + duty.backups:
-            if uid == d.OPEN or uid in seen:
+            if uid in (d.OPEN, d.ANYONE) or uid in seen:
                 continue
             seen.add(uid)
             if guild.get_member(uid) is not None:
@@ -261,6 +261,7 @@ class DutiesHubView(OwnedView):
             label(c.BTN_REMINDERS), sec, self._reminders, row=1, disabled=not (live and has)
         )
         self.add_button(label(c.BTN_CONTACT), sec, self._contact, row=1, disabled=not live)
+        self.add_button(label(c.BTN_CATEGORIES), sec, self._categories, row=1, disabled=not live)
         self.add_pagination_row(page=self.page, page_count=page_count, on_page=self._turn, row=2)
 
     async def _turn(self, inter: discord.Interaction, page: int) -> None:
@@ -292,9 +293,14 @@ class DutiesHubView(OwnedView):
     # ── Add and edit ─────────────────────────────────────────────────────────
 
     async def _add(self, inter: discord.Interaction) -> None:
-        async def _start(i: discord.Interaction, name: str, category: str, description: str):
+        async def _start(i: discord.Interaction, name: str, category, description: str):
             draft = d.Duty(
-                id=0, guild_id=self.guild.id, name=name, category=category, description=description
+                id=0,
+                guild_id=self.guild.id,
+                name=name,
+                category_id=category.id if category else 0,
+                category=category.name if category else "",
+                description=description,
             )
             editor = DutyEditorView(self, draft)
             await i.response.send_message(
@@ -302,7 +308,10 @@ class DutiesHubView(OwnedView):
             )
             editor.message = await i.original_response()
 
-        await inter.response.send_modal(DutyDetailsModal(c.MODAL_ADD_TITLE, None, _start))
+        categories = duties_db.list_categories(self.guild.id)
+        await inter.response.send_modal(
+            DutyDetailsModal(c.MODAL_ADD_TITLE, None, categories, _start)
+        )
 
     async def _edit(self, inter: discord.Interaction) -> None:
         async def _picked(i: discord.Interaction, duty_id: int, picker: DutyPickerView):
@@ -416,6 +425,11 @@ class DutiesHubView(OwnedView):
 
         await self._pick(inter, _picked)
 
+    async def _categories(self, inter: discord.Interaction) -> None:
+        view = CategoryManagerView(self)
+        await inter.response.send_message(embed=view.render(), view=view, ephemeral=True)
+        view.message = await inter.original_response()
+
     async def _contact(self, inter: discord.Interaction) -> None:
         view = ContactSettingsView(self)
         await inter.response.send_message(embed=view.render(), view=view, ephemeral=True)
@@ -426,12 +440,18 @@ class DutiesHubView(OwnedView):
 
 
 class DutyDetailsModal(discord.ui.Modal):
-    """Name, category and description: the three things a duty is called
-    and what it covers. Used to start a new duty and to edit one."""
+    """Name, category and description: what a duty is called, which group
+    it sits in, and what it covers. Used to start a new duty and to edit one.
 
-    def __init__(self, title: str, duty: d.Duty | None, on_submit_cb):
+    The category is a dropdown of the server's managed list, so a typo can't
+    split one group into two. With no categories yet, the modal says where
+    to add them instead (a text display, which a modal can hold).
+    """
+
+    def __init__(self, title: str, duty: d.Duty | None, categories: list, on_submit_cb):
         super().__init__(title=title)
         self._cb = on_submit_cb
+        self._categories = {str(x.id): x for x in categories}
         self.name_input = discord.ui.TextInput(
             label=c.FIELD_NAME,
             placeholder=c.FIELD_NAME_PLACEHOLDER,
@@ -439,13 +459,26 @@ class DutyDetailsModal(discord.ui.Modal):
             max_length=NAME_MAX,
             required=True,
         )
-        self.category_input = discord.ui.TextInput(
-            label=c.FIELD_CATEGORY,
-            placeholder=c.FIELD_CATEGORY_PLACEHOLDER,
-            default=duty.category if duty else None,
-            max_length=CATEGORY_MAX,
-            required=False,
-        )
+        self.add_item(self.name_input)
+        self.category_label = None
+        if categories:
+            current = str(duty.category_id) if duty and duty.category_id else ""
+            select = discord.ui.Select(
+                placeholder=c.FIELD_CATEGORY_PLACEHOLDER,
+                min_values=0,
+                max_values=1,
+                required=False,
+                options=[
+                    discord.SelectOption(
+                        label=x.name[:100], value=str(x.id), default=str(x.id) == current
+                    )
+                    for x in categories[:25]
+                ],
+            )
+            self.category_label = discord.ui.Label(text=c.FIELD_CATEGORY, component=select)
+            self.add_item(self.category_label)
+        else:
+            self.add_item(discord.ui.TextDisplay(c.DUTY_NO_CATEGORIES))
         self.description_input = discord.ui.TextInput(
             label=c.FIELD_DESCRIPTION,
             placeholder=c.FIELD_DESCRIPTION_PLACEHOLDER,
@@ -454,8 +487,13 @@ class DutyDetailsModal(discord.ui.Modal):
             max_length=DESCRIPTION_MAX,
             required=False,
         )
-        for item in (self.name_input, self.category_input, self.description_input):
-            self.add_item(item)
+        self.add_item(self.description_input)
+
+    def picked_category(self):
+        if self.category_label is None:
+            return None
+        values = self.category_label.component.values
+        return self._categories.get(values[0]) if values else None
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         name = (self.name_input.value or "").strip()
@@ -465,7 +503,7 @@ class DutyDetailsModal(discord.ui.Modal):
         await self._cb(
             interaction,
             name,
-            (self.category_input.value or "").strip(),
+            self.picked_category(),
             (self.description_input.value or "").strip(),
         )
 
@@ -500,6 +538,28 @@ def place_holders(old: tuple[int, ...], named: tuple[int, ...], open_n: int) -> 
     return tuple(out)
 
 
+def holder_choices(guild: discord.Guild, duty: d.Duty) -> list[tuple[int, str]] | None:
+    """The people a holder picker offers, as (id, name), sorted by name, or
+    None to fall back to Discord's own user picker.
+
+    The leadership role's members, plus anyone already holding the duty
+    without the role (dropping them from the list would drop them from the
+    duty on the next save). "Anyone in leadership" is added by the caller.
+    None when there is no leadership role to offer, or more people than one
+    select holds beside that choice.
+    """
+    role = leadership_role(guild, config.get_config(guild.id))
+    if role is None:
+        return None
+    people = {m.id: m.display_name for m in role.members if not m.bot}
+    for uid in duty.all_holders():
+        if uid not in people:
+            people[uid] = display_name(guild, uid)
+    if len(people) > 24:
+        return None
+    return sorted(people.items(), key=lambda x: x[1].casefold())
+
+
 class DutyEditorView(OwnedView):
     """One duty, held as a draft until 💾 Save."""
 
@@ -513,6 +573,7 @@ class DutyEditorView(OwnedView):
         self._build()
 
     def _named(self, kind: str) -> tuple[int, ...]:
+        """Everyone chosen for `kind`, "anyone in leadership" included."""
         ids = self.draft.primaries if kind == d.SLOT_PRIMARY else self.draft.backups
         return tuple(uid for uid in ids if uid != d.OPEN)
 
@@ -527,19 +588,42 @@ class DutyEditorView(OwnedView):
 
     def _build(self) -> None:
         self.clear_items()
-        anyone = self.draft.backup_anyone_leadership
+        choices = holder_choices(self.hub.guild, self.draft)
         for row, kind, placeholder in (
             (0, d.SLOT_PRIMARY, c.EDITOR_PH_PRIMARY),
-            (1, d.SLOT_BACKUP, c.EDITOR_PH_BACKUP_ANYONE if anyone else c.EDITOR_PH_BACKUP),
+            (1, d.SLOT_BACKUP, c.EDITOR_PH_BACKUP),
         ):
-            select = discord.ui.UserSelect(
-                placeholder=placeholder,
-                min_values=0,
-                max_values=MAX_HOLDERS,
-                default_values=[discord.Object(id=uid) for uid in self._named(kind)],
-                disabled=kind == d.SLOT_BACKUP and anyone,
-                row=row,
-            )
+            chosen = self._named(kind)
+            if choices is not None:
+                options = [
+                    discord.SelectOption(label=name[:100], value=str(uid), default=uid in chosen)
+                    for uid, name in choices
+                ]
+                options.append(
+                    discord.SelectOption(
+                        label=c.EDITOR_ANYONE_OPTION,
+                        description=c.EDITOR_ANYONE_OPTION_DESC,
+                        value=str(d.ANYONE),
+                        default=d.ANYONE in chosen,
+                    )
+                )
+                select = discord.ui.Select(
+                    placeholder=placeholder,
+                    min_values=0,
+                    max_values=min(len(options), MAX_HOLDERS + 1),
+                    options=options,
+                    row=row,
+                )
+            else:
+                # No leadership role to offer, or more leaders than one
+                # select holds: Discord's own user picker, which searches.
+                select = discord.ui.UserSelect(
+                    placeholder=placeholder,
+                    min_values=0,
+                    max_values=MAX_HOLDERS,
+                    default_values=[discord.Object(id=uid) for uid in chosen if uid != d.ANYONE],
+                    row=row,
+                )
             select.callback = self._holders_cb(kind, select)
             self.add_item(select)
         for row, kind, placeholder, word in (
@@ -553,20 +637,12 @@ class DutyEditorView(OwnedView):
                 )
                 for n in range(max(MAX_OPEN, current) + 1)
             ]
-            select = discord.ui.Select(
-                placeholder=placeholder,
-                options=options,
-                disabled=kind == d.SLOT_BACKUP and anyone,
-                row=row,
-            )
+            select = discord.ui.Select(placeholder=placeholder, options=options, row=row)
             select.callback = self._open_cb(kind, select)
             self.add_item(select)
 
         sec = discord.ButtonStyle.secondary
         self.add_button(c.BTN_NAME_AND_DESCRIPTION, sec, self._details, row=4)
-        self.add_button(
-            c.BTN_BACKUP_NAMED if anyone else c.BTN_BACKUP_ANYONE, sec, self._toggle_anyone, row=4
-        )
         self.add_button(
             c.BTN_CONTACT_OFF if self.draft.contact_enabled else c.BTN_CONTACT_ON,
             sec,
@@ -580,9 +656,14 @@ class DutyEditorView(OwnedView):
         self._build()
         await inter.response.edit_message(embed=r.editor_embed(self.draft, r.mention), view=self)
 
-    def _holders_cb(self, kind: str, select: discord.ui.UserSelect):
+    def _holders_cb(self, kind: str, select):
         async def _cb(inter: discord.Interaction):
-            picked = [u.id for u in select.values if not getattr(u, "bot", False)]
+            if isinstance(select, discord.ui.UserSelect):
+                picked = [u.id for u in select.values if not getattr(u, "bot", False)]
+                if d.ANYONE in self._named(kind):
+                    picked.append(d.ANYONE)  # not offered here, so kept as it was
+            else:
+                picked = [int(v) for v in select.values]
             self._set(kind, merge_order(self._named(kind), picked), self._open(kind))
             await self._redraw(inter)
 
@@ -596,17 +677,20 @@ class DutyEditorView(OwnedView):
         return _cb
 
     async def _details(self, inter: discord.Interaction) -> None:
-        async def _apply(i: discord.Interaction, name: str, category: str, description: str):
-            self.draft = replace(self.draft, name=name, category=category, description=description)
+        async def _apply(i: discord.Interaction, name: str, category, description: str):
+            self.draft = replace(
+                self.draft,
+                name=name,
+                category_id=category.id if category else 0,
+                category=category.name if category else "",
+                description=description,
+            )
             await self._redraw(i)
 
-        await inter.response.send_modal(DutyDetailsModal(c.MODAL_EDIT_TITLE, self.draft, _apply))
-
-    async def _toggle_anyone(self, inter: discord.Interaction) -> None:
-        self.draft = replace(
-            self.draft, backup_anyone_leadership=not self.draft.backup_anyone_leadership
+        categories = duties_db.list_categories(self.hub.guild.id)
+        await inter.response.send_modal(
+            DutyDetailsModal(c.MODAL_EDIT_TITLE, self.draft, categories, _apply)
         )
-        await self._redraw(inter)
 
     async def _toggle_contact(self, inter: discord.Interaction) -> None:
         self.draft = replace(self.draft, contact_enabled=not self.draft.contact_enabled)
@@ -647,6 +731,160 @@ class DutyEditorView(OwnedView):
     async def _cancel(self, inter: discord.Interaction) -> None:
         self.stop()
         await inter.response.edit_message(content=CANCEL_BACKPEDAL_DEFAULT, embed=None, view=None)
+
+
+# ── Categories ───────────────────────────────────────────────────────────────
+
+
+class CategoryNameModal(discord.ui.Modal):
+    def __init__(self, title: str, current: str, on_submit_cb):
+        super().__init__(title=title)
+        self._cb = on_submit_cb
+        self.name_input = discord.ui.TextInput(
+            label=c.FIELD_CATEGORY_NAME,
+            placeholder=c.FIELD_CATEGORY_NAME_PLACEHOLDER,
+            default=current or None,
+            max_length=CATEGORY_MAX,
+            required=True,
+        )
+        self.add_item(self.name_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await self._cb(interaction, (self.name_input.value or "").strip())
+
+
+class CategoryManagerView(OwnedView):
+    """Add, rename and delete the categories duties are grouped under."""
+
+    timeout_hint = c.HUB_ROUTE
+
+    def __init__(self, hub: DutiesHubView):
+        super().__init__(timeout=600)
+        self.hub = hub
+        self.owner_id = hub.owner_id
+        self.selected: int | None = None
+        self.categories: list = []
+
+    def render(self) -> discord.Embed:
+        self.categories = duties_db.list_categories(self.hub.guild.id)
+        ids = [x.id for x in self.categories]
+        if self.selected not in ids:
+            self.selected = ids[0] if len(ids) == 1 else None
+        self._build()
+        return r.categories_embed(self.categories)
+
+    def _current(self):
+        return next((x for x in self.categories if x.id == self.selected), None)
+
+    def _build(self) -> None:
+        self.clear_items()
+        if self.categories:
+            select = discord.ui.Select(
+                placeholder=c.CATEGORY_PICK_PLACEHOLDER,
+                options=[
+                    discord.SelectOption(
+                        label=x.name[:100],
+                        description=r.category_count(x.duty_count),
+                        value=str(x.id),
+                        default=x.id == self.selected,
+                    )
+                    for x in self.categories
+                ],
+                row=0,
+            )
+
+            async def _pick(inter: discord.Interaction):
+                self.selected = int(select.values[0])
+                await inter.response.edit_message(embed=self.render(), view=self)
+
+            select.callback = _pick
+            self.add_item(select)
+        current = self._current()
+        sec = discord.ButtonStyle.secondary
+        self.add_button(
+            c.BTN_CATEGORY_ADD,
+            discord.ButtonStyle.primary,
+            self._add,
+            row=1,
+            disabled=len(self.categories) >= duties_db.MAX_CATEGORIES,
+        )
+        self.add_button(c.BTN_CATEGORY_EDIT, sec, self._edit, row=1, disabled=current is None)
+        self.add_button(c.BTN_CATEGORY_DELETE, sec, self._delete, row=1, disabled=current is None)
+
+    async def _changed(self, inter: discord.Interaction, ack: str) -> None:
+        await inter.response.edit_message(content=ack, embed=self.render(), view=self)
+        await self.hub.refresh()
+
+    async def _add(self, inter: discord.Interaction) -> None:
+        async def _save(i: discord.Interaction, name: str):
+            try:
+                new_id = duties_db.save_category(self.hub.guild.id, name)
+            except duties_db.DuplicateCategoryName:
+                await i.response.send_message(
+                    c.CATEGORY_DUPLICATE.format(name=name), ephemeral=True
+                )
+                return
+            except LookupError:
+                await i.response.send_message(
+                    c.CATEGORIES_FULL.format(cap=duties_db.MAX_CATEGORIES), ephemeral=True
+                )
+                return
+            self.selected = new_id
+            await self._changed(i, c.CATEGORY_ADDED.format(name=name))
+
+        await inter.response.send_modal(CategoryNameModal(c.MODAL_CATEGORY_ADD, "", _save))
+
+    async def _edit(self, inter: discord.Interaction) -> None:
+        current = self._current()
+        if current is None:
+            return
+
+        async def _save(i: discord.Interaction, name: str):
+            try:
+                duties_db.save_category(self.hub.guild.id, name, current.id)
+            except duties_db.DuplicateCategoryName:
+                await i.response.send_message(
+                    c.CATEGORY_DUPLICATE.format(name=name), ephemeral=True
+                )
+                return
+            await self._changed(i, c.CATEGORY_RENAMED.format(old=current.name, name=name))
+            await duties_panel.refresh_panel(self.hub.bot, self.hub.guild.id)
+
+        await inter.response.send_modal(
+            CategoryNameModal(c.MODAL_CATEGORY_EDIT, current.name, _save)
+        )
+
+    async def _delete(self, inter: discord.Interaction) -> None:
+        current = self._current()
+        if current is None:
+            return
+
+        async def _yes(i: discord.Interaction):
+            duties_db.delete_category(self.hub.guild.id, current.id)
+            confirm.stop()
+            await self.back(i, c.CATEGORY_DELETED.format(name=current.name))
+            await self.hub.refresh()
+
+        async def _no(i: discord.Interaction):
+            confirm.stop()
+            await self.back(i, CANCEL_BACKPEDAL_DEFAULT)
+
+        confirm = _ConfirmView(self.owner_id, c.BTN_DELETE_YES, _yes, _no)
+        self.stop()
+        await inter.response.edit_message(
+            content=r.category_delete_confirm(current.name, current.duty_count),
+            embed=None,
+            view=confirm,
+        )
+        await hand_over(confirm, inter)
+
+    async def back(self, inter: discord.Interaction, ack: str | None) -> None:
+        """Back to a fresh manager after a confirm (this one stopped when it
+        handed its message over)."""
+        self.stop()
+        fresh = CategoryManagerView(self.hub)
+        await inter.response.edit_message(content=ack, embed=fresh.render(), view=fresh)
+        await hand_over(fresh, inter)
 
 
 # ── Reminders ────────────────────────────────────────────────────────────────
@@ -819,7 +1057,7 @@ class ReminderListView(OwnedView):
         await hand_over(confirm, inter)
 
 
-_SEND_ORDER = (d.SEND_PRIMARIES, d.SEND_BACKUPS, d.SEND_BOTH, d.SEND_CHANNEL)
+_SEND_ORDER = (d.SEND_PRIMARIES, d.SEND_BACKUPS, d.SEND_BOTH, d.SEND_CHANNEL, d.SEND_THREAD)
 
 
 class ReminderEditorView(OwnedView):
@@ -855,11 +1093,15 @@ class ReminderEditorView(OwnedView):
         return datetime.now(guild_tz(config.get_config(self.parent.hub.guild.id))).date()
 
     def _wants_channel(self) -> bool:
-        if self.draft.send_to == d.SEND_CHANNEL:
-            return True
-        return self.duty.backup_anyone_leadership and self.draft.send_to in (
-            d.SEND_BACKUPS,
-            d.SEND_BOTH,
+        """Show the channel picker: a channel post, or a DM reminder whose
+        "anyone in leadership" half posts instead."""
+        return self.draft.send_to == d.SEND_CHANNEL or r.anyone_goes_to_a_post(
+            self.duty, self.draft
+        )
+
+    def _wants_ping(self) -> bool:
+        return self.draft.send_to in d.POST_TARGETS or r.anyone_goes_to_a_post(
+            self.duty, self.draft
         )
 
     def render(self) -> discord.Embed:
@@ -926,7 +1168,12 @@ class ReminderEditorView(OwnedView):
         )
 
         async def _send(inter: discord.Interaction):
-            self.draft = replace(self.draft, send_to=send.values[0])
+            new = send.values[0]
+            changes = {"send_to": new}
+            # A channel id is no thread, and a thread id no channel.
+            if (new == d.SEND_THREAD) != (self.draft.send_to == d.SEND_THREAD):
+                changes["channel_id"] = 0
+            self.draft = replace(self.draft, **changes)
             await self._redraw(inter)
 
         send.callback = _send
@@ -952,9 +1199,12 @@ class ReminderEditorView(OwnedView):
             channel.callback = _channel
             self.add_item(channel)
 
+        if self.draft.send_to == d.SEND_THREAD:
+            self.add_item(self._thread_select())
+
         sec = discord.ButtonStyle.secondary
         self.add_button(c.BTN_MESSAGE_AND_TIME, sec, self._text, row=4)
-        if self._wants_channel():
+        if self._wants_ping():
             self.add_button(
                 c.BTN_PING_OFF if self.draft.ping_holders else c.BTN_PING_ON,
                 sec,
@@ -963,6 +1213,47 @@ class ReminderEditorView(OwnedView):
             )
         self.add_button(c.BTN_SAVE, discord.ButtonStyle.primary, self._save, row=4)
         self.add_button(c.BTN_CANCEL, sec, self._cancel, row=4)
+
+    def _thread_select(self) -> discord.ui.Select:
+        """Open threads the bot can post in, the same list the bot's other
+        channel-or-thread pickers offer (`wizard_steps.ChannelSelectStep`).
+        Discord's channel picker drops threads when channels are offered
+        too, which is why threads get their own select."""
+        from wizard_steps import ChannelSelectStep
+
+        guild = self.parent.hub.guild
+        threads = sorted(
+            ChannelSelectStep._collect_pickable_threads(guild),
+            key=lambda t: ((t.parent.name if t.parent else "~"), t.name),
+        )[:25]
+        if not threads:
+            return discord.ui.Select(
+                placeholder=c.THREAD_NONE_OPEN,
+                options=[discord.SelectOption(label=c.THREAD_NONE_OPEN, value="0")],
+                disabled=True,
+                row=3,
+            )
+        select = discord.ui.Select(
+            placeholder=c.THREAD_PH,
+            options=[
+                discord.SelectOption(
+                    label=c.THREAD_OPTION.format(
+                        thread=t.name, parent=t.parent.name if t.parent else "?"
+                    )[:100],
+                    value=str(t.id),
+                    default=t.id == self.draft.channel_id,
+                )
+                for t in threads
+            ],
+            row=3,
+        )
+
+        async def _thread(inter: discord.Interaction):
+            self.draft = replace(self.draft, channel_id=int(select.values[0]))
+            await self._redraw(inter)
+
+        select.callback = _thread
+        return select
 
     async def _redraw(self, inter: discord.Interaction) -> None:
         await inter.response.edit_message(embed=self.render(), view=self)
@@ -990,6 +1281,8 @@ class ReminderEditorView(OwnedView):
             out.append(c.NEEDS_INTERVAL)
         if self.draft.send_to == d.SEND_CHANNEL and not self.draft.channel_id:
             out.append(c.NEEDS_CHANNEL)
+        if self.draft.send_to == d.SEND_THREAD and not self.draft.channel_id:
+            out.append(c.NEEDS_THREAD)
         return out
 
     async def _save(self, inter: discord.Interaction) -> None:

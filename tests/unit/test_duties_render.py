@@ -74,9 +74,11 @@ def test_people_lists_names_then_open_positions():
 
 
 def test_people_says_nobody_and_anyone_in_leadership():
-    x = duty(backups=(C,), backup_anyone_leadership=True)
+    x = duty(primaries=(), backups=(C, d.ANYONE, d.OPEN))
     assert r.people(x, d.SLOT_PRIMARY, name_of) == c.NOBODY
-    assert r.people(x, d.SLOT_BACKUP, name_of) == c.ANYONE_IN_LEADERSHIP
+    assert r.people(x, d.SLOT_BACKUP, name_of) == (
+        f"Charlie, {c.ANYONE_IN_LEADERSHIP}, {c.OPEN_MARK}"
+    )
 
 
 def test_duty_block_marks_paused():
@@ -256,13 +258,29 @@ def test_reminder_text_is_clamped():
     assert len(r.reminder_text(duty(), rem, name_of, server="S", dm=True)) == 2000
 
 
-def test_editor_notes_where_anyone_in_leadership_backups_go():
-    x = duty(backup_anyone_leadership=True)
+def test_editor_notes_where_anyone_in_leadership_reminders_go():
+    x = duty(backups=(d.ANYONE,))
     embed = r.reminder_editor_embed(
         x, reminder(send_to=d.SEND_BOTH), None, name_of, leadership_channel_id=55
     )
     assert c.REMINDER_ANYONE_NOTE.format(channel="<#55>") in embed.description
     assert c.REMINDER_PING_OFF in embed.description
+    quiet = r.reminder_editor_embed(
+        x, reminder(send_to=d.SEND_PRIMARIES), None, name_of, leadership_channel_id=55
+    )
+    assert c.REMINDER_ANYONE_NOTE.format(channel="<#55>") not in quiet.description
+
+
+def test_thread_destination_wording():
+    assert r.reminder_dest(reminder(send_to=d.SEND_THREAD)) == c.DEST_NO_THREAD
+    assert r.reminder_dest(reminder(send_to=d.SEND_THREAD, channel_id=9)) == "<#9>"
+    assert r.send_label(d.SEND_THREAD) == c.SEND_THREAD
+
+
+def test_panel_names_anyone_in_leadership():
+    x = duty(name="Disputes", primaries=(A, d.ANYONE), contact_enabled=True)
+    (field,) = r.panel_embed([x], name_of).fields
+    assert f"Handled by Alpha and {c.ANYONE_IN_LEADERSHIP}" in field.value
 
 
 def test_fallback_names_who_it_was_for():

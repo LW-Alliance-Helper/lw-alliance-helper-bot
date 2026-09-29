@@ -30,11 +30,12 @@ def new_reminder(duty_id, guild_id=G, **kw) -> d.DutyReminder:
 
 
 def test_round_trip_keeps_every_field_and_slot_order(temp_db):
+    cat = db.save_category(G, "Members")
     duty_id = db.save_duty(
         new_duty(
-            category="Members",
+            category_id=cat,
             description="Concerns between members",
-            primaries=(B, d.OPEN, A),
+            primaries=(B, d.OPEN, A, d.ANYONE),
             backups=(C,),
             contact_enabled=True,
             sort_order=3,
@@ -46,8 +47,9 @@ def test_round_trip_keeps_every_field_and_slot_order(temp_db):
         guild_id=G,
         name="Disputes",
         category="Members",
+        category_id=cat,
         description="Concerns between members",
-        primaries=(B, d.OPEN, A),
+        primaries=(B, d.OPEN, A, d.ANYONE),
         backups=(C,),
         contact_enabled=True,
         sort_order=3,
@@ -62,12 +64,57 @@ def test_update_replaces_holders(temp_db):
     assert got.backups == ()
 
 
-def test_named_backups_survive_switching_to_anyone_in_leadership_and_back(temp_db):
-    duty_id = db.save_duty(new_duty(backups=(B, C)))
-    db.save_duty(replace(db.get_duty(G, duty_id), backup_anyone_leadership=True))
-    assert db.get_duty(G, duty_id).holders(d.SLOT_BACKUP) == ()
-    db.save_duty(replace(db.get_duty(G, duty_id), backup_anyone_leadership=False))
-    assert db.get_duty(G, duty_id).holders(d.SLOT_BACKUP) == (B, C)
+def test_anyone_in_leadership_is_never_vacated(temp_db):
+    duty_id = db.save_duty(new_duty(backups=(B, d.ANYONE)))
+    assert db.vacate_holder(G, d.ANYONE, "") == []
+    assert db.get_duty(G, duty_id).backups == (B, d.ANYONE)
+
+
+# ── Categories ───────────────────────────────────────────────────────────────
+
+
+def test_categories_add_rename_and_order_the_list(temp_db):
+    members = db.save_category(G, "Members")
+    vs = db.save_category(G, "VS")
+    db.save_duty(new_duty("Later", category_id=vs))
+    db.save_duty(new_duty("Loose"))
+    db.save_duty(new_duty("First", category_id=members))
+    assert [(x.name, x.category) for x in db.list_duties(G)] == [
+        ("First", "Members"),
+        ("Later", "VS"),
+        ("Loose", ""),
+    ]
+    db.save_category(G, "Member care", members)
+    assert db.list_duties(G)[0].category == "Member care"
+    assert [(x.name, x.duty_count) for x in db.list_categories(G)] == [
+        ("Member care", 1),
+        ("VS", 1),
+    ]
+
+
+def test_category_names_are_unique_ignoring_case(temp_db):
+    db.save_category(G, "Members")
+    with pytest.raises(db.DuplicateCategoryName):
+        db.save_category(G, "members")
+    db.save_category(OTHER_G, "Members")
+    with pytest.raises(ValueError):
+        db.save_category(G, "  ")
+
+
+def test_categories_are_capped_at_one_select(temp_db):
+    for i in range(db.MAX_CATEGORIES):
+        db.save_category(G, f"C{i}")
+    with pytest.raises(LookupError):
+        db.save_category(G, "One more")
+
+
+def test_deleting_a_category_keeps_its_duties_uncategorized(temp_db):
+    cat = db.save_category(G, "Members")
+    duty_id = db.save_duty(new_duty(category_id=cat))
+    assert db.delete_category(G, cat) == 1
+    assert db.delete_category(G, cat) is None
+    got = db.get_duty(G, duty_id)
+    assert (got.category_id, got.category) == (0, "")
 
 
 def test_names_are_unique_per_server_ignoring_case(temp_db):

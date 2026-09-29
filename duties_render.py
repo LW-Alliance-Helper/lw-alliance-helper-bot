@@ -53,12 +53,12 @@ def _plural(n: int, pair: tuple[str, str]) -> str:
 
 
 def people(duty: d.Duty, kind: str, name_of: NameOf) -> str:
-    """One slot's holders for display: names, then `open` for each open
-    position, or `nobody` when the slot is empty. An "anyone in leadership"
-    backup says so."""
-    if kind == d.SLOT_BACKUP and duty.backup_anyone_leadership:
-        return c.ANYONE_IN_LEADERSHIP
+    """One slot's holders for display: names, then "anyone in leadership"
+    when it is one of the choices, then `open` for each open position, or
+    `nobody` when the slot is empty."""
     parts = [name_of(uid) for uid in duty.holders(kind)]
+    if duty.has_anyone(kind):
+        parts.append(c.ANYONE_IN_LEADERSHIP)
     parts += [c.OPEN_MARK] * duty.open_count(kind)
     return ", ".join(parts) if parts else c.NOBODY
 
@@ -308,6 +308,7 @@ _SEND_LABELS = {
     d.SEND_BACKUPS: c.SEND_BACKUPS,
     d.SEND_BOTH: c.SEND_BOTH,
     d.SEND_CHANNEL: c.SEND_CHANNEL,
+    d.SEND_THREAD: c.SEND_THREAD,
 }
 
 
@@ -316,11 +317,24 @@ def send_label(send_to: str) -> str:
 
 
 def reminder_dest(reminder: d.DutyReminder) -> str:
-    if reminder.send_to == d.SEND_CHANNEL:
+    if reminder.send_to in d.POST_TARGETS:
         if reminder.channel_id:
             return c.DEST_CHANNEL.format(channel=f"<#{reminder.channel_id}>")
-        return c.DEST_NO_CHANNEL
+        return c.DEST_NO_THREAD if reminder.send_to == d.SEND_THREAD else c.DEST_NO_CHANNEL
     return send_label(reminder.send_to)
+
+
+def anyone_goes_to_a_post(duty: d.Duty, reminder: d.DutyReminder) -> bool:
+    """A DM reminder whose wanted slots include "anyone in leadership":
+    that half posts in a channel instead of every leader's DMs."""
+    if reminder.send_to in d.POST_TARGETS:
+        return False
+    wanted = {
+        d.SEND_PRIMARIES: (d.SLOT_PRIMARY,),
+        d.SEND_BACKUPS: (d.SLOT_BACKUP,),
+        d.SEND_BOTH: (d.SLOT_PRIMARY, d.SLOT_BACKUP),
+    }.get(reminder.send_to, ())
+    return any(duty.has_anyone(kind) for kind in wanted)
 
 
 def _preview(text: str, limit: int = 120) -> str:
@@ -366,11 +380,10 @@ def reminder_editor_embed(
         c.REMINDER_WHEN.format(when=reminder_when(draft, tz_name)),
         c.REMINDER_SENDS.format(dest=reminder_dest(draft)),
     ]
-    if draft.send_to == d.SEND_CHANNEL or (
-        duty.backup_anyone_leadership and draft.send_to in (d.SEND_BACKUPS, d.SEND_BOTH)
-    ):
+    anyone_post = anyone_goes_to_a_post(duty, draft)
+    if draft.send_to in d.POST_TARGETS or anyone_post:
         lines.append(c.REMINDER_PING_ON if draft.ping_holders else c.REMINDER_PING_OFF)
-    if duty.backup_anyone_leadership and draft.send_to in (d.SEND_BACKUPS, d.SEND_BOTH):
+    if anyone_post:
         target = draft.channel_id or leadership_channel_id
         where = f"<#{target}>" if target else "the leadership channel"
         lines.append("")
@@ -479,6 +492,13 @@ def contact_duties(duties: Iterable[d.Duty]) -> list[d.Duty]:
     return [x for x in duties if x.contact_enabled and not x.paused][:CONTACT_CAP]
 
 
+def _who(duty: d.Duty, kind: str, name_of: NameOf) -> list[str]:
+    names = [name_of(uid) for uid in duty.holders(kind)]
+    if duty.has_anyone(kind):
+        names.append(c.ANYONE_IN_LEADERSHIP)
+    return names
+
+
 def panel_embed(duties: Sequence[d.Duty], name_of: NameOf) -> discord.Embed:
     """The member-facing post. Written for someone with no idea what the bot
     is (UX.md, members): it says what the buttons do, then who handles
@@ -493,16 +513,42 @@ def panel_embed(duties: Sequence[d.Duty], name_of: NameOf) -> discord.Embed:
         lines = []
         if duty.description:
             lines.append(duty.description)
-        primaries = [name_of(uid) for uid in duty.holders(d.SLOT_PRIMARY)]
+        primaries = _who(duty, d.SLOT_PRIMARY, name_of)
         if primaries:
             lines.append(c.PANEL_HELD_BY.format(who=_join(primaries)))
-        backups = [name_of(uid) for uid in duty.holders(d.SLOT_BACKUP)]
+        backups = _who(duty, d.SLOT_BACKUP, name_of)
         if backups:
             lines.append(c.PANEL_BACKUP.format(who=_join(backups)))
         embed.add_field(
             name=duty.name[:256], value=("\n".join(lines) or "​")[:_FIELD_VALUE], inline=False
         )
     return embed
+
+
+# ── Categories ───────────────────────────────────────────────────────────────
+
+
+def category_count(n: int) -> str:
+    return c.CATEGORY_COUNT[min(n, 2)].format(n=n)
+
+
+def categories_embed(categories: Sequence) -> discord.Embed:
+    """The category manager: each category and how many duties are in it."""
+    if not categories:
+        body = f"{c.CATEGORIES_INTRO}\n\n{c.CATEGORIES_NONE}"
+    else:
+        rows = [
+            c.CATEGORY_ROW.format(name=x.name, n=category_count(x.duty_count)) for x in categories
+        ]
+        body = c.CATEGORIES_INTRO + "\n\n" + "\n".join(rows)
+    return discord.Embed(
+        title=c.CATEGORIES_TITLE, description=body[:4096], color=discord.Color.blurple()
+    )
+
+
+def category_delete_confirm(name: str, n: int) -> str:
+    moved = c.CATEGORY_DELETE_MOVED[min(n, 2)].format(n=n, other=f"**{c.HUB_NO_CATEGORY}**")
+    return c.CATEGORY_DELETE_CONFIRM.format(name=name, moved=moved)
 
 
 # ── Tickets ──────────────────────────────────────────────────────────────────
@@ -519,8 +565,15 @@ def thread_name(duty_name: str, member_name: str, now: datetime) -> str:
     return name[:_THREAD_NAME]
 
 
-def thread_opener(duty: d.Duty, member_id: int, holder_ids: Sequence[int]) -> str:
+def thread_opener(
+    duty: d.Duty, member_id: int, holder_ids: Sequence[int], *, role_mention: str = ""
+) -> str:
+    """The first message in a thread. `role_mention` is the Leadership
+    role, named when "anyone in leadership" holds the duty; it reads as the
+    role and never pings (the message allows user mentions only)."""
     holders = [mention(uid) for uid in holder_ids]
+    if role_mention:
+        holders.append(role_mention)
     return c.THREAD_OPENER.format(
         member=mention(member_id),
         duty=duty.name,

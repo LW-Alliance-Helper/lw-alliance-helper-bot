@@ -127,12 +127,14 @@ async def test_a_paused_duty_sends_nothing(seeded_db, premium_on):
     w.members[A].send.assert_not_awaited()
 
 
-async def test_without_premium_nothing_is_sent_or_claimed(seeded_db):
+async def test_without_premium_the_occurrence_is_used_up_not_sent(seeded_db):
     w = World()
     _reminder(_duty(primaries=(A,)))
     with patch("premium.feature_gate", AsyncMock(return_value=False)):
         assert await rem.run_reminder_tick(w.bot, MONDAY_9PM) == 0
-    assert db.list_reminders(G)[0].last_fired_on is None  # resubscribing sends it
+    w.members[A].send.assert_not_awaited()
+    # Resubscribing later the same day waits for the next time.
+    assert db.list_reminders(G)[0].last_fired_on == date(2026, 9, 28)
 
 
 async def test_an_undeliverable_dm_falls_back_to_the_leadership_channel(seeded_db, premium_on):
@@ -174,17 +176,17 @@ async def test_a_channel_post_with_ping(seeded_db, premium_on):
     assert [u.id for u in post.await_args.kwargs["allowed_mentions"].users] == [A, B]
 
 
-async def test_anyone_in_leadership_backups_post_in_the_leadership_channel(
+async def test_anyone_in_leadership_posts_in_the_leadership_channel(
     leadership_role_set, premium_on
 ):
     w = World()
-    duty_id = _duty(primaries=(A,), backups=(C,), backup_anyone_leadership=True)
+    duty_id = _duty(primaries=(A,), backups=(C, d.ANYONE))
     _reminder(duty_id, send_to=d.SEND_BOTH, ping_holders=True)
 
     await rem.run_reminder_tick(w.bot, MONDAY_9PM)
 
     w.members[A].send.assert_awaited_once()
-    w.members[C].send.assert_not_awaited()
+    w.members[C].send.assert_awaited_once()
     post = w.channels[LEAD_CH].send
     assert post.await_args.args[0].startswith("<@&777>\n")
     assert post.await_args.kwargs["allowed_mentions"].roles == [w.role]

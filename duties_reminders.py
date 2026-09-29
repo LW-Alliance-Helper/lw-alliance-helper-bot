@@ -180,6 +180,13 @@ async def run_reminder_tick(bot, now: datetime | None = None) -> int:
             if not due:
                 continue
             if not await premium.feature_gate(PREMIUM_FEATURE, guild_id, bot=bot):
+                # Without Premium the occurrence is used up, not held back:
+                # resubscribing mid-day then waits for each reminder's next
+                # time rather than sending everything it missed at once.
+                for _duty, reminder, occurrence in due:
+                    await asyncio.to_thread(
+                        duties_db.mark_reminder_fired, guild_id, reminder.id, occurrence
+                    )
                 continue
             for duty, reminder, occurrence in due:
                 claimed = await asyncio.to_thread(

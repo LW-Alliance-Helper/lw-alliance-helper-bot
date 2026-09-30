@@ -152,6 +152,10 @@ PREMIUM_FEATURES: set[str] = {
     "buddy_presets",
     # Transfer Management (#16) — entirely Premium (no free slice).
     "transfers",
+    # Leadership Duties (#687), entirely Premium. On a lapse everything stays
+    # saved and the /duties hub shows the list read-only; reminders stop and
+    # the contact buttons refuse at click time.
+    "leadership_duties",
     # Map Manager integration (#316). The `/map_manager` hub's Link action
     # (linking a guild's alliance to the Map Manager web app) is Premium-gated;
     # change / unlink are not gated (you can always fix or remove an existing link).

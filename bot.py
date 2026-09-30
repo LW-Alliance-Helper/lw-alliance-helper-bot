@@ -400,6 +400,11 @@ async def on_ready():
     if "champion_duel_cog" not in bot.extensions:
         await bot.load_extension("champion_duel_cog")
         print("[INFO] Champion Duel cog loaded")
+    # Leadership Duties (#687): `/duties`, its reminder loop, and the
+    # persistent contact buttons. Premium is checked inside, per action.
+    if "duties_cog" not in bot.extensions:
+        await bot.load_extension("duties_cog")
+        print("[INFO] Leadership Duties cog loaded")
     # Loaded after every feature cog, so each one has registered its
     # config_health subjects before the first notifier pass can render them.
     if "config_health_cog" not in bot.extensions:

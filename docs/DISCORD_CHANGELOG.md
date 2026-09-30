@@ -125,6 +125,15 @@ accident.
 
 ---
 
+**1.9.4** — 2026-09-29
+- VS saves now flag anything that doesn't add up, with a button to fix it
+- Remove an alliance entered by mistake from Edit league on `/vs`
+- A new guide shows where to find each alliance's details in the game
+- The new-league paste box accepts lines exactly as the game shows them
+- VS scouting no longer mixes in a different league that shares your league's name
+
+---
+
 **1.9.3** — 2026-09-28
 - New VS League history shows every alliance's scores across a past league
 - Shiny Tasks setup now picks a warzone group instead of a typed server range

@@ -9,6 +9,24 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.9.4] — 2026-09-29
+
+### Added
+- Saving Alliance Duel (VS) data now flags anything that save got wrong, with a button to the screen that fixes it ([#651](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/651)).
+- **Check my data for errors** now has a button for each problem, and sends earlier leagues' problems to the right Sheet row ([#651](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/651)).
+- **Remove an alliance** takes out an alliance entered by mistake, and offers to fix the pairings it leaves ([#651](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/651)).
+- **📖 Where to find each alliance's details**: a step-by-step guide, with game screenshots, to gathering a new league ([#655](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/655)).
+
+### Changed
+- **Edit league** on `/vs` now holds the league details, Add or edit alliance, and Remove an alliance ([#651](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/651)).
+- The new-league paste box accepts lines exactly as the game shows them, and says which fields are required ([#655](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/655)).
+- League names are stored the way the game writes them, so `S37` and `12 - 4` match however they were typed ([#658](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/658)).
+- Bracket, My path and League history each explain what they need when you track only your own alliance ([#691](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/691)).
+
+### Fixed
+- VS scouting no longer mixes in a different league that happens to share your league's name ([#658](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/658)).
+- This week no longer sends you to the Sheet to add matchups ([#691](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/691)).
+
 ## [1.9.3] — 2026-09-28
 
 ### Added

@@ -130,6 +130,18 @@ def test_a_tracking_mode_choice_gets_an_upsell_not_an_error():
     assert "switch any time" in text
 
 
+def test_a_choice_leads_with_the_views_own_sentence():
+    embed = ads.upsell_embed(
+        ad.BracketIncomplete(reason="own_alliance_mode", detail="This view needs everyone.")
+    )
+    assert embed.description.startswith("This view needs everyone. Tracking all 16 alliances")
+
+
+def test_a_choice_with_no_sentence_of_its_own_falls_back_to_the_generic_one():
+    embed = ads.upsell_embed(ad.BracketIncomplete(reason="own_alliance_mode", detail=""))
+    assert embed.description.startswith("You're tracking just your alliance")
+
+
 def test_genuinely_missing_data_prompts_action():
     reason = ad.BracketIncomplete(reason="roster_size", detail="Only 4 alliances are recorded.")
     embed = ads.upsell_embed(reason)

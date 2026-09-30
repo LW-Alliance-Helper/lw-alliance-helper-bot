@@ -657,11 +657,17 @@ def upsell_embed(reason: ad.BracketIncomplete) -> discord.Embed:
       is absent and where to put it.
     """
     if reason.is_choice:
+        # Each view says in its own words what it needs (#691): the caller's
+        # `detail` leads, so Bracket, My path and League history no longer
+        # show one word-for-word message, and League history is not described
+        # as a projection. The generic line covers a caller that sends none.
+        opening = reason.detail or (
+            "You're tracking just your alliance, so there's no bracket to project through."
+        )
         return discord.Embed(
             title="🏆 This view needs the full bracket",
             description=(
-                "You're tracking just your alliance, so there's no bracket to "
-                "project through. Tracking all 16 alliances adds your "
+                f"{opening} Tracking all 16 alliances adds your "
                 "projected path, who you're likely to face next, and which "
                 "alliances to scout first.\n\n"
                 f"Switch any time from {VS_SETUP_NAV}. Doing it mid league "

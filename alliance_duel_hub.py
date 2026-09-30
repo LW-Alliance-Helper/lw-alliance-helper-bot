@@ -349,10 +349,12 @@ def hub_embed(state: HubState) -> discord.Embed:
     return embed
 
 
-#: The week view for a lapsed guild with no Opponent column filled in: the
-#: computed pairing is the Premium half, so there is nothing else to show.
+#: The week view for a lapsed guild with no matchups recorded: the computed
+#: pairing is the Premium half, so there is nothing else to show. Points at the
+#: Discord screen that records them, not the Sheet's Opponent column (#691,
+#: the same direction as #651). Draft, for sign-off.
 VS_WEEK_NO_RECORDED_OPPONENTS = (
-    "No matchups recorded for this week yet. Add them in the Opponent column of your sheet."
+    f"No matchups recorded for this week yet. Add them with **{ad_entry.VS_BTN_BACKFILL_RESULTS}**."
 )
 
 

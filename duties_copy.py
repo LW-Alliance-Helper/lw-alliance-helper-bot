@@ -12,6 +12,9 @@ Two words are chosen on purpose:
   storm time slot in this product (UX.md, One name, one meaning).
 - **"thread"**, never "ticket", in anything a member reads. "Ticket" is the
   working name in code and on the issue.
+- **"assigned"**, never "holder" or "holds", for the people on a duty.
+  Kevin, 2026-09-30: "they're more assigned to it or in charge of doing
+  this thing." "Holder" stays the working name in code.
 """
 
 from __future__ import annotations
@@ -22,7 +25,7 @@ FEATURE_NAME = "Leadership Duties"
 DUTIES_CMD = "/duties"
 HUB_BTN_DUTIES = "🪪 Leadership Duties"
 HUB_TITLE = HUB_BTN_DUTIES
-CMD_DESCRIPTION = "Who in leadership holds which duty, with reminders and member contact"
+CMD_DESCRIPTION = "Who in leadership is assigned to which duty, with reminders and member contact"
 
 # ── Hub buttons ──────────────────────────────────────────────────────────────
 
@@ -42,11 +45,13 @@ HUB_ROUTE = f"`{DUTIES_CMD}`"
 
 # ── Hub ──────────────────────────────────────────────────────────────────────
 
-HUB_INTRO = "The standing duties your leadership team splits between you, and who holds each one."
+HUB_INTRO = (
+    "The standing duties your leadership team splits between you, and who is assigned to each one."
+)
 HUB_EMPTY = f"ℹ️ No duties yet. Click **{BTN_ADD}** to record the first one."
 HUB_FREE = (
-    f"🔒 **{FEATURE_NAME}** is a 💎 Premium feature. Record who in leadership holds "
-    "which duty, remind them in your own words, and let members open a private "
+    f"🔒 **{FEATURE_NAME}** is a 💎 Premium feature. Record who in leadership is "
+    "assigned to which duty, remind them in your own words, and let members open a private "
     "thread with the right people. Run `/upgrade` to unlock it."
 )
 HUB_LAPSED = (
@@ -67,13 +72,13 @@ ANYONE_IN_LEADERSHIP = "anyone in leadership"
 # ── Workload ─────────────────────────────────────────────────────────────────
 
 WORKLOAD_TITLE = BTN_WORKLOAD
-WORKLOAD_INTRO = "How many duties each leader holds. Paused ones are counted and noted."
+WORKLOAD_INTRO = "How many duties each leader is assigned. Paused ones are counted and noted."
 WORKLOAD_PRIMARY = "Primary: {n}"
 WORKLOAD_BACKUP = "Backup: {n}"
 WORKLOAD_PAUSED = " ({n} paused)"
 WORKLOAD_NOT_LEADERSHIP = " (not in leadership)"
 WORKLOAD_NO_ROLE = (
-    "ℹ️ Your leadership role isn't set in `/setup`, so this only lists people who hold a duty."
+    "ℹ️ Your leadership role isn't set in `/setup`, so this only lists people assigned to a duty."
 )
 WORKLOAD_OPEN_FIELD = "Open positions"
 WORKLOAD_OPEN_LINE = "• **{duty}**{paused}: {n} {kind}"
@@ -86,7 +91,7 @@ KIND_BACKUP = ("backup", "backups")
 MY_TITLE = BTN_MY_DUTIES
 MY_PRIMARY_FIELD = "Primary on"
 MY_BACKUP_FIELD = "Backup on"
-MY_NONE = "ℹ️ You don't hold any duties."
+MY_NONE = "ℹ️ You aren't assigned to any duties."
 MY_EMPTY_FIELD = "None"
 
 # ── Picking a duty ───────────────────────────────────────────────────────────
@@ -118,8 +123,8 @@ EDITOR_CATEGORY = "**Category:** {category}"
 EDITOR_CONTACT_ON = "**Members can contact:** ✅ on"
 EDITOR_CONTACT_OFF = "**Members can contact:** ❌ off"
 EDITOR_UNSAVED = "Nothing is saved until you click **💾 Save**."
-EDITOR_PH_PRIMARY = "Primary holders"
-EDITOR_PH_BACKUP = "Backup holders"
+EDITOR_PH_PRIMARY = "Assigned as primary"
+EDITOR_PH_BACKUP = "Assigned as backup"
 #: The "anyone in leadership" choice in both holder pickers (item 3).
 EDITOR_ANYONE_OPTION = "Anyone in leadership"
 EDITOR_ANYONE_OPTION_DESC = "Everyone with your leadership role"
@@ -212,11 +217,11 @@ REMINDER_PING_OFF = "**Ping:** ❌ off"
 REMINDER_PREVIEW_FIELD = "Preview"
 REMINDER_NO_MESSAGE = "*No message yet.*"
 REMINDER_ANYONE_NOTE = (
-    "ℹ️ Anyone in leadership holds this duty, so their reminders post in "
+    "ℹ️ Anyone in leadership is assigned to this duty, so their reminders post in "
     "{channel} rather than going to every leader's DMs."
 )
 REMINDER_PLACEHOLDER_HELP = (
-    "Write `{primary}`, `{backup}` or `{duty}` and I'll fill in whoever holds it when it sends."
+    "Write `{primary}`, `{backup}` or `{duty}` and I'll fill in whoever is assigned when it sends."
 )
 
 #: The schedule choices, in Kevin's words (2026-09-30), keyed by
@@ -299,8 +304,8 @@ REMINDER_FALLBACK = "🔔 I couldn't DM {who} this **{duty}** reminder, so here 
 
 CONTACT_TITLE = BTN_CONTACT
 CONTACT_INTRO = (
-    "Members click a duty's button to open a private thread with the people who "
-    "hold it. Turn contact on for a duty from **✏️ Edit a duty**."
+    "Members click a duty's button to open a private thread with the people "
+    "assigned to it. Turn contact on for a duty from **✏️ Edit a duty**."
 )
 CONTACT_BUTTONS_LINE = "**Buttons posted in:** {channel}"
 CONTACT_THREADS_LINE = "**Threads open under:** {channel}"
@@ -354,7 +359,7 @@ TICKET_UNAVAILABLE = "ℹ️ This isn't available right now. Please message lead
 TICKET_DUTY_UNAVAILABLE = (
     "ℹ️ **{duty}** isn't taking messages here right now. Please message leadership directly."
 )
-TICKET_NOBODY = "ℹ️ Nobody holds **{duty}** right now. Please message leadership directly."
+TICKET_NOBODY = "ℹ️ Nobody is assigned to **{duty}** right now. Please message leadership directly."
 TICKET_RECENT = "ℹ️ You just opened a thread for **{duty}**: {thread}"
 TICKET_READY = "✅ Your thread is ready: {thread}"
 TICKET_OPENING = "⏳ Already opening your thread for **{duty}**."
@@ -406,7 +411,7 @@ HELP_COMMANDS = (
     (
         f"{DUTIES_CMD} → {BTN_CONTACT}",
         "Post contact buttons for members. Each click opens a private thread with "
-        "that member and the duty's holders.",
+        "that member and the people assigned to the duty.",
     ),
 )
 
@@ -414,4 +419,4 @@ HELP_COMMANDS = (
 
 CATCHUP_TITLE = "Leadership Duties reminder: {duty}"
 CATCHUP_TO_CHANNEL = "sent to #{channel}"
-CATCHUP_TO_DMS = "sent as DMs to the holders"
+CATCHUP_TO_DMS = "sent as DMs to the people assigned"

@@ -8,6 +8,7 @@ import pytest
 
 import config
 import duties as d
+import duties_copy
 import duties_db as db
 import outage_catchup as oc
 from tests.conftest import TEST_GUILD_ID
@@ -48,7 +49,7 @@ async def test_yesterdays_missed_reminder_is_offered(seeded_db, premium_on):
     items = await oc.scan_duty_reminders(MagicMock(), _guild(), config.get_config(G), WINDOW)
     (item,) = items
     assert item.title == "Leadership Duties reminder: Daily Schedule"
-    assert item.destination == "sent as DMs to the holders"
+    assert item.destination == duties_copy.CATCHUP_TO_DMS
     assert item.scheduled_local.date() == date(2026, 9, 27)
 
 

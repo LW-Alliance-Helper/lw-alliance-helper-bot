@@ -59,6 +59,23 @@ def test_us_english():
     assert not offenders
 
 
+def test_people_on_a_duty_are_assigned_not_holders():
+    """Kevin, 2026-09-30: holders "is a very weird word for this"."""
+    import re
+
+    import config_health as ch
+
+    words = re.compile(r"\b(holder|holders|holds|held)\b", re.I)
+    shared = [(f"_REASONS[{k}]", v) for k, v in ch._REASONS.items() if k == ch.HOLDER_LEFT]
+    shared += [(f"_FIXES[{k}]", v) for k, v in ch._FIXES.items() if k == ch.HOLDER_LEFT]
+    # `{holders}` is a format placeholder, filled with mentions; it never
+    # reaches a reader.
+    offenders = [
+        n for n, v in list(_copy_strings()) + shared if words.search(re.sub(r"\{[a-z_]+\}", "", v))
+    ]
+    assert not offenders
+
+
 def test_no_bare_slot_in_copy():
     """ "Slot" is a storm time slot in this product; a duty has positions."""
     offenders = [n for n, v in _copy_strings() if "slot" in v.lower()]

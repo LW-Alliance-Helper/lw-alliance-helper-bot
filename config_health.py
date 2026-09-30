@@ -577,7 +577,7 @@ _REASONS = {
     MEMBERS_CANT_VIEW: (
         "Members can't see that channel, so they can't read a thread opened in it."
     ),
-    HOLDER_LEFT: "Someone who held duties has left the server.",
+    HOLDER_LEFT: "Someone assigned to duties has left the server.",
 }
 
 _FIXES = {
@@ -607,7 +607,7 @@ _FIXES = {
     MEMBERS_CANT_VIEW: (
         "Let your member role **View Channel** there, or pick a channel members can see."
     ),
-    HOLDER_LEFT: "Pick someone for each open place, or leave it open on purpose.",
+    HOLDER_LEFT: "Assign someone to each open position, or leave it open on purpose.",
 }
 
 

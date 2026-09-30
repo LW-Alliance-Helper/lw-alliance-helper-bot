@@ -1379,7 +1379,7 @@ def test_league_history_follows_the_same_premium_gate_as_its_siblings():
 @pytest.mark.parametrize(
     "button, says",
     [
-        ("_bracket", "The bracket view shows all 16 alliances"),
+        ("_bracket", "You are only tracking your own alliance. Bracket view requires"),
         ("_path", "Working out your path needs every alliance in the bracket"),
         ("_league_history", "League history compares every alliance in a league"),
     ],

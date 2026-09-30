@@ -134,7 +134,7 @@ def test_a_choice_leads_with_the_views_own_sentence():
     embed = ads.upsell_embed(
         ad.BracketIncomplete(reason="own_alliance_mode", detail="This view needs everyone.")
     )
-    assert embed.description.startswith("This view needs everyone. Tracking all 16 alliances")
+    assert embed.description.startswith("This view needs everyone.\n\nSwitch any time")
 
 
 def test_a_choice_with_no_sentence_of_its_own_falls_back_to_the_generic_one():

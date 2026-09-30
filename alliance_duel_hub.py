@@ -352,7 +352,7 @@ def hub_embed(state: HubState) -> discord.Embed:
 #: The week view for a lapsed guild with no matchups recorded: the computed
 #: pairing is the Premium half, so there is nothing else to show. Points at the
 #: Discord screen that records them, not the Sheet's Opponent column (#691,
-#: the same direction as #651). Draft, for sign-off.
+#: the same direction as #651). Signed off 29 Sep.
 VS_WEEK_NO_RECORDED_OPPONENTS = (
     f"No matchups recorded for this week yet. Add them with **{ad_entry.VS_BTN_BACKFILL_RESULTS}**."
 )
@@ -1396,7 +1396,8 @@ class VSHubView(OwnedView):
         if await self._own_alliance_only(
             interaction,
             "League history compares every alliance in a league, and you are "
-            "tracking just your own.",
+            "tracking just your own. Tracking all 16 alliances adds "
+            f"{ad_setup.VS_FULL_BRACKET_ADDS}",
         ):
             return
         await open_league_history_picker(interaction, self.state)
@@ -1424,6 +1425,9 @@ class VSHubView(OwnedView):
     async def _own_alliance_only(self, interaction: discord.Interaction, detail: str) -> bool:
         """Explain a whole-bracket view to a paying guild tracking just itself.
 
+        `detail` is the view's whole first paragraph (#691): what it needs, then
+        what tracking the bracket adds.
+
         Without Premium these buttons are disabled, so only a paying guild gets
         here, and what it is missing is the mode, not the tier.
         """
@@ -1438,9 +1442,11 @@ class VSHubView(OwnedView):
         return True
 
     async def _bracket(self, interaction: discord.Interaction):
+        # Kevin's wording, 29 Sep (#691).
         if await self._own_alliance_only(
             interaction,
-            "The bracket view shows all 16 alliances, and you are tracking just your own.",
+            "You are only tracking your own alliance. Bracket view requires tracking all "
+            f"16 alliances to add {ad_setup.VS_FULL_BRACKET_ADDS}",
         ):
             return
         await interaction.response.send_message(
@@ -1461,7 +1467,8 @@ class VSHubView(OwnedView):
         if await self._own_alliance_only(
             interaction,
             "Working out your path needs every alliance in the bracket, "
-            "and you are tracking just your own.",
+            "and you are tracking just your own. Tracking all 16 alliances adds "
+            f"{ad_setup.VS_FULL_BRACKET_ADDS}",
         ):
             return
         view = VSPathView(self.state, interaction.user.id)

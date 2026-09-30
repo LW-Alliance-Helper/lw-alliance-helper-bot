@@ -645,6 +645,13 @@ def fill_bracket_embed(league: ad.LeagueKey, missing: dict) -> discord.Embed:
     return embed
 
 
+#: What tracking the whole bracket adds, ending every "needs the full bracket"
+#: paragraph. One copy, so the views cannot drift apart on it (#691).
+VS_FULL_BRACKET_ADDS = (
+    "your projected path, who you're likely to face next, and which alliances to scout first."
+)
+
+
 def upsell_embed(reason: ad.BracketIncomplete) -> discord.Embed:
     """What a bracket-dependent view shows when the bracket isn't there.
 
@@ -657,13 +664,19 @@ def upsell_embed(reason: ad.BracketIncomplete) -> discord.Embed:
       is absent and where to put it.
     """
     if reason.is_choice:
+        # Each view says in its own words what it needs (#691): the caller's
+        # `detail` is the whole first paragraph, so Bracket, My path and League
+        # history no longer show one word-for-word message. Signed off 29 Sep;
+        # Bracket's paragraph is Kevin's wording. The generic paragraph covers
+        # a caller that sends none.
+        opening = reason.detail or (
+            "You're tracking just your alliance, so there's no bracket to project "
+            f"through. Tracking all 16 alliances adds {VS_FULL_BRACKET_ADDS}"
+        )
         return discord.Embed(
             title="🏆 This view needs the full bracket",
             description=(
-                "You're tracking just your alliance, so there's no bracket to "
-                "project through. Tracking all 16 alliances adds your "
-                "projected path, who you're likely to face next, and which "
-                "alliances to scout first.\n\n"
+                f"{opening}\n\n"
                 f"Switch any time from {VS_SETUP_NAV}. Doing it mid league "
                 "offers to fill in the rows you skipped."
             ),

@@ -1376,17 +1376,31 @@ def test_league_history_follows_the_same_premium_gate_as_its_siblings():
     assert by_label[f"💎 {hub.VS_BTN_HISTORY}"].disabled is True
 
 
-async def test_league_history_routes_a_paying_own_alliance_guild_to_the_upsell():
-    """Same `_own_alliance_only` helper Bracket and Path use, so the same
-    generic "needs the full bracket" copy renders (its `is_choice` branch
-    does not use the per-call `detail` text -- true for all three callers,
-    not new here)."""
+@pytest.mark.parametrize(
+    "button, says",
+    [
+        ("_bracket", "You are only tracking your own alliance. Bracket view requires"),
+        ("_path", "Working out your path needs every alliance in the bracket"),
+        ("_league_history", "League history compares every alliance in a league"),
+    ],
+)
+async def test_each_whole_bracket_view_explains_itself_to_an_own_alliance_guild(button, says):
+    """Same `_own_alliance_only` helper for all three, and each one's own
+    sentence now reaches the officer (#691): before, all three showed one
+    word-for-word message, which described League history as a projection."""
     state = hub.HubState(1, _cfg(tracking_mode=ad.MODE_OWN_ALLIANCE), [_row(OWN_TAG)], premium=True)
     view = hub.VSHubView(None, state, owner_id=7)
     inter = _interaction()
-    await view._league_history(inter)
+    await getattr(view, button)(inter)
     embed = inter.response.sent[0]["embed"]
     assert embed.title == "🏆 This view needs the full bracket"
+    assert embed.description.startswith(says)
+
+
+def test_a_lapsed_week_points_at_the_discord_screen_not_the_sheet():
+    # #691, the same direction as #651: matchups are entered from Discord.
+    assert "sheet" not in hub.VS_WEEK_NO_RECORDED_OPPONENTS.lower()
+    assert hub.ad_entry.VS_BTN_BACKFILL_RESULTS in hub.VS_WEEK_NO_RECORDED_OPPONENTS
 
 
 async def test_league_history_opens_the_picker_for_a_full_bracket_guild():

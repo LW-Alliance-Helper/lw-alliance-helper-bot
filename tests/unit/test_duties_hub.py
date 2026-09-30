@@ -108,7 +108,7 @@ def _selects(view):
     return [x for x in view.children if isinstance(x, (discord.ui.Select, discord.ui.UserSelect))]
 
 
-async def test_picking_holders_keeps_open_positions_and_skips_bots():
+async def test_picking_holders_keeps_open_positions_and_skips_bots(temp_db):
     view = _editor(primaries=(A, d.OPEN))
     primary = _selects(view)[0]
     primary._values = [
@@ -120,7 +120,7 @@ async def test_picking_holders_keeps_open_positions_and_skips_bots():
     assert view.draft.primaries == (A, d.OPEN, B)  # the open position keeps its place
 
 
-async def test_setting_open_positions():
+async def test_setting_open_positions(temp_db):
     view = _editor(primaries=(A,))
     open_primary = _selects(view)[2]
     open_primary._values = ["2"]

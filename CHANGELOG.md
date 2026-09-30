@@ -9,6 +9,14 @@ Each entry is a slim summary — heavier context (root cause, what we
 tried, design rationale) lives in the corresponding commit message
 and PR description.
 
+## [1.10.0] — 2026-09-30
+
+### Added
+- **Leadership Duties** (💎 Premium): record the duties your leadership team splits, who is assigned to each, and each leader's workload, with `/duties` ([#687](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/687)).
+- Duty reminders you write yourself, sent by DM, in a channel or in a thread, on a schedule from daily to monthly ([#687](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/687)).
+- Contact buttons let members open a private thread with the people assigned to a duty ([#687](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/687)).
+- Leadership is told when someone assigned to a duty leaves the server, and their positions open up ([#687](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/687)).
+
 ## [1.9.4] — 2026-09-29
 
 ### Added

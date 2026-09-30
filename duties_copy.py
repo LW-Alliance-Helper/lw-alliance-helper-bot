@@ -29,7 +29,12 @@ CMD_DESCRIPTION = "Who in leadership is assigned to which duty, with reminders a
 
 # ── Hub buttons ──────────────────────────────────────────────────────────────
 
-BTN_ADD = "➕ Add a duty"
+#: ➕ stays on the button but never goes in text. Discord draws it near-black
+#: (#31373D), invisible on an embed or a message (Kevin, 2026-09-30: "remove it
+#: from the embed box and leave it on the button"). Text names the button by
+#: its plain name.
+ADD_DUTY = "Add a duty"
+BTN_ADD = f"➕ {ADD_DUTY}"
 BTN_EDIT = "✏️ Edit a duty"
 BTN_PAUSE = "⏸️ Pause or resume"
 BTN_DELETE = "🗑️ Delete a duty"
@@ -48,7 +53,7 @@ HUB_ROUTE = f"`{DUTIES_CMD}`"
 HUB_INTRO = (
     "The standing duties your leadership team splits between you, and who is assigned to each one."
 )
-HUB_EMPTY = f"ℹ️ No duties yet. Click **{BTN_ADD}** to record the first one."
+HUB_EMPTY = f"ℹ️ No duties yet. Click **{ADD_DUTY}** to record the first one."
 HUB_FREE = (
     f"🔒 **{FEATURE_NAME}** is a 💎 Premium feature. Record who in leadership is "
     "assigned to which duty, remind them in your own words, and let members open a private "
@@ -98,7 +103,7 @@ MY_EMPTY_FIELD = "None"
 
 PICK_PROMPT = "Which duty?"
 PICK_PLACEHOLDER = "Pick a duty…"
-PICK_NONE = f"ℹ️ There are no duties yet. Click **{BTN_ADD}** first."
+PICK_NONE = f"ℹ️ There are no duties yet. Click **{ADD_DUTY}** first."
 PICK_GONE = "ℹ️ That duty isn't there anymore. Someone may have just deleted it."
 
 # ── Duty editor ──────────────────────────────────────────────────────────────
@@ -158,11 +163,12 @@ CONTACT_FULL = (
 
 CATEGORIES_TITLE = BTN_CATEGORIES
 CATEGORIES_INTRO = "Group your duties. Each duty picks one from a list when you add or edit it."
-CATEGORIES_NONE = "ℹ️ No categories yet. Click **➕ Add** to make one."
+ADD_CATEGORY = "Add"
+CATEGORIES_NONE = f"ℹ️ No categories yet. Click **{ADD_CATEGORY}** to make one."
 CATEGORY_ROW = "• **{name}**: {n}"
 CATEGORY_COUNT = ("no duties", "1 duty", "{n} duties")
 CATEGORY_PICK_PLACEHOLDER = "Pick a category…"
-BTN_CATEGORY_ADD = "➕ Add"
+BTN_CATEGORY_ADD = f"➕ {ADD_CATEGORY}"
 BTN_CATEGORY_EDIT = "✏️ Edit"
 BTN_CATEGORY_DELETE = "🗑️ Delete"
 MODAL_CATEGORY_ADD = "Add a category"

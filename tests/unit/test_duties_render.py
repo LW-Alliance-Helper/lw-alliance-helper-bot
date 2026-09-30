@@ -76,6 +76,13 @@ def test_people_on_a_duty_are_assigned_not_holders():
     assert not offenders
 
 
+def test_the_plus_is_only_ever_on_a_button():
+    """Discord draws ➕ near-black, invisible on an embed or a message, so
+    it goes on buttons only; text names the button without it."""
+    offenders = [n for n, v in _copy_strings() if "➕" in v and not n.startswith("BTN_")]
+    assert not offenders
+
+
 def test_no_bare_slot_in_copy():
     """ "Slot" is a storm time slot in this product; a duty has positions."""
     offenders = [n for n, v in _copy_strings() if "slot" in v.lower()]

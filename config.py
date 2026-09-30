@@ -1120,6 +1120,12 @@ def init_db():
                 PRIMARY KEY (guild_id, kind, event_key)
             )
         """)
+
+        # Leadership Duties (#687). The schema lives with its queries in
+        # `duties_db`; it is created here so every database gets it.
+        import duties_db
+
+        duties_db.create_tables(conn)
         conn.commit()
         _standardize_vs_labels(conn)
 
@@ -6848,6 +6854,17 @@ _REMOVAL_SCRUBS: tuple[tuple[str, str, str], ...] = (
         "saved_by_user_id = :uid AND target_member_id <> :sid",
     ),
     ("storm_roster_images", "posted_by_user_id = 0", "posted_by_user_id = :uid"),
+    # Leadership Duties (#687): the person goes, the position stays, open,
+    # the same as when a holder leaves the server. The note of who left a
+    # slot open goes too. One statement, as above, so a row naming them in
+    # both columns counts once.
+    (
+        "guild_duty_holders",
+        "user_id = CASE WHEN user_id = :uid THEN 0 ELSE user_id END, "
+        "vacated_name = CASE WHEN vacated_user_id = :uid THEN '' ELSE vacated_name END, "
+        "vacated_user_id = CASE WHEN vacated_user_id = :uid THEN 0 ELSE vacated_user_id END",
+        "user_id = :uid OR vacated_user_id = :uid",
+    ),
     # One statement rather than two so a person who is both the owner and the
     # installer of a guild counts as one row touched instead of two.
     (
@@ -7056,6 +7073,11 @@ _GUILD_REMOVAL_DELETES: tuple[tuple[str, str], ...] = (
     ("guild_config_health", "guild_id = :gid"),
     ("guild_events", "guild_id = :gid"),
     ("guild_extra_surveys", "guild_id = :gid"),
+    ("guild_duties", "guild_id = :gid"),
+    ("guild_duties_config", "guild_id = :gid"),
+    ("guild_duty_categories", "guild_id = :gid"),
+    ("guild_duty_holders", "guild_id = :gid"),
+    ("guild_duty_reminders", "guild_id = :gid"),
     ("guild_growth_config", "guild_id = :gid"),
     ("guild_install_metadata", "guild_id = :gid"),
     ("guild_member_roster_config", "guild_id = :gid"),
@@ -7376,6 +7398,20 @@ def purge_user_data(user_id: int, *, apply: bool = False) -> dict:
             out["scrubbed"]["storm_roster_drafts"] = draft_scrubbed
         if draft_deleted:
             out["deleted"]["storm_roster_drafts"] = draft_deleted
+        noticed = [
+            r["guild_id"]
+            for r in conn.execute(
+                "SELECT guild_id FROM guild_config_health WHERE subject = 'duties.holders'"
+            ).fetchall()
+        ]
         if apply:
             conn.commit()
+    if apply and noticed:
+        # Leadership Duties (#687): a "left the server" notice copied their
+        # name into its text. Rebuilt from the scrubbed rows, it no longer
+        # does, and goes entirely if they were the only one.
+        import duties_health
+
+        for gid in noticed:
+            duties_health.sync_departures(gid)
     return out

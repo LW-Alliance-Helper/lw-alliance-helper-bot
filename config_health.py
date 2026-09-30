@@ -60,9 +60,23 @@ CHANNEL_NO_SEND = "channel_no_send"
 # #604: a Shiny Tasks range saved wider than one warzone group, whose post
 # would be too long for Discord to send.
 WARZONE_RANGE_TOO_WIDE = "warzone_range_too_wide"
+# Leadership Duties (#687). A ticket channel the bot can't open private
+# threads in, and one the members themselves can't see (a private thread is
+# only visible to people who can view its parent channel).
+NO_THREADS = "no_threads"
+MEMBERS_CANT_VIEW = "members_cant_view"
+# Leadership Duties (#687): someone who held duties left the server and
+# their places are open. Nothing stopped working, which is why it is a
+# notice kind rather than a broken one (see NOTICE_KINDS).
+HOLDER_LEFT = "holder_left"
 
 SHEET_KINDS = frozenset({MISSING_TAB, MISSING_SHEET, NO_ACCESS})
 CHANNEL_KINDS = frozenset({CHANNEL_GONE, CHANNEL_NO_VIEW, CHANNEL_NO_SEND})
+#: Kinds that ask leadership to look at something without anything having
+#: stopped. The digest says so rather than "stopped working", and colors
+#: them as a warning rather than a failure. They end by being dealt with,
+#: not by recovering, so their owners clear them with :func:`dismiss`.
+NOTICE_KINDS = frozenset({HOLDER_LEFT})
 
 # How long an unfixed problem stays quiet between posts. Inherited from
 # #413's SHEET_ERROR_RENOTIFY_HOURS, which was picked so a problem that
@@ -115,7 +129,13 @@ def get_subject(key: str) -> Subject:
     and a vague notice is better than a notifier pass that dies and takes
     every other guild's digest with it.
     """
-    return _SUBJECTS.get(key) or Subject(key=key, label="part of your setup")
+    # A per-instance key (`base:discriminator`, e.g. one reminder channel of
+    # several) takes the copy registered for its base.
+    return (
+        _SUBJECTS.get(key)
+        or _SUBJECTS.get(key.split(":", 1)[0])
+        or Subject(key=key, label="part of your setup")
+    )
 
 
 # ── Records ──────────────────────────────────────────────────────────────────
@@ -338,6 +358,29 @@ def clear(guild_id: int, subject: str, *, now: datetime | None = None) -> None:
         conn.commit()
 
 
+def dismiss(guild_id: int, subject: str) -> None:
+    """Drop a subject's row with no recovery line.
+
+    For :data:`NOTICE_KINDS`: a notice that has been dealt with did not
+    "start working again", so :func:`clear`'s recovery post would say
+    something untrue. Safe to call when there is no row.
+    """
+    _delete(int(guild_id), [subject])
+
+
+def set_detail(guild_id: int, subject: str, detail: str) -> None:
+    """Rewrite what a stored problem says without touching when it was seen
+    or notified. For a notice whose contents shrink as leadership deals with
+    part of it: the next re-nudge names only what's left, and dealing with
+    part of it doesn't count as a new problem to post about straight away."""
+    with config._get_conn() as conn:
+        conn.execute(
+            "UPDATE guild_config_health SET detail = ? WHERE guild_id = ? AND subject = ?",
+            (detail or "", int(guild_id), subject),
+        )
+        conn.commit()
+
+
 def problems(guild_id: int) -> list[Problem]:
     """Everything currently broken for this guild, for the hub / setup banners.
 
@@ -530,6 +573,11 @@ _REASONS = {
         "That covers more than one warzone group, so the daily post would be too long "
         "for Discord to send, and it isn't being posted."
     ),
+    NO_THREADS: "I can't open private threads in that channel.",
+    MEMBERS_CANT_VIEW: (
+        "Members can't see that channel, so they can't read a thread opened in it."
+    ),
+    HOLDER_LEFT: "Someone assigned to duties has left the server.",
 }
 
 _FIXES = {
@@ -552,6 +600,14 @@ _FIXES = {
         "or pick a different channel in setup."
     ),
     WARZONE_RANGE_TOO_WIDE: "Pick your alliance's warzone group in setup.",
+    NO_THREADS: (
+        "Give my role **Create Private Threads** and **Send Messages in Threads** "
+        "there, or pick a different channel."
+    ),
+    MEMBERS_CANT_VIEW: (
+        "Let your member role **View Channel** there, or pick a channel members can see."
+    ),
+    HOLDER_LEFT: "Assign someone to each open position, or leave it open on purpose.",
 }
 
 
@@ -589,14 +645,30 @@ def build_digest_embed(items: list[Problem]) -> discord.Embed:
     emergencies.
     """
     count = len(items)
-    lead = (
-        "Something I was told to use has stopped working, so the feature that "
-        "depends on it isn't running."
-        if count == 1
-        else f"{count} things I was told to use have stopped working, so the features "
-        "that depend on them aren't running."
-    )
-    embed = discord.Embed(title=STUCK_TITLE, description=lead, color=discord.Color.red())
+    stopped = sum(1 for p in items if p.kind not in NOTICE_KINDS)
+    if stopped == 0:
+        lead = (
+            "Something in your setup needs a look."
+            if count == 1
+            else f"{count} things in your setup need a look."
+        )
+    elif stopped == 1:
+        lead = (
+            "Something I was told to use has stopped working, so the feature that "
+            "depends on it isn't running."
+        )
+    else:
+        lead = (
+            f"{stopped} things I was told to use have stopped working, so the features "
+            "that depend on them aren't running."
+        )
+    if stopped and stopped < count:
+        others = count - stopped
+        lead += f" {others} other thing{'s' if others != 1 else ''} also need{'s' if others == 1 else ''} a look."
+    # Orange is "warning short of broken" (DESIGN.md, Color): a notice that
+    # nothing stopped must not arrive in the color that means it did.
+    color = discord.Color.red() if stopped else discord.Color.orange()
+    embed = discord.Embed(title=STUCK_TITLE, description=lead, color=color)
     for problem in items[:_MAX_DIGEST_FIELDS]:
         value = f"{describe(problem)}\n\n{fix_instruction(problem)}"
         embed.add_field(name=problem.label[:256], value=value[:1024], inline=False)
@@ -607,7 +679,10 @@ def build_digest_embed(items: list[Problem]) -> discord.Embed:
             value=f"{remaining} other thing(s) too. Check your setup screens for the full list.",
             inline=False,
         )
-    embed.set_footer(text="I'll keep checking, and I'll say so here when it's working again.")
+    if stopped:
+        embed.set_footer(text="I'll keep checking, and I'll say so here when it's working again.")
+    else:
+        embed.set_footer(text="I'll mention it here again tomorrow if it's still open.")
     return embed
 
 

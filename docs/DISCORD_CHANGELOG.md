@@ -125,6 +125,13 @@ accident.
 
 ---
 
+**1.10.0** — 2026-09-30
+- New Leadership Duties with `/duties` keeps track of which leaders are assigned to each duty
+- Remind the people assigned to a duty in your own words, by DM, channel or thread
+- Members can open a private thread with the people assigned to a duty
+
+---
+
 **1.9.4** — 2026-09-29
 - VS improvements including flagging errors, removing alliances, and a guide of where to find league information
 

@@ -41,7 +41,7 @@ wrong.
    needs.
 6. **Set the `localStorage` KEY and the export `HEAD`** in the script. The key
    must be unique per page and stable across redeploys of that page.
-7. **Run all three checks.** Every time.
+7. **Run all four checks.** Every time, the emoji one last.
 8. **Publish and give the full URL** in the message, with one clause saying
    what it is. Never a nickname.
 
@@ -63,16 +63,17 @@ wrong.
 modal). Wrap in `.screen` with a `.cap` label; mark the string under review
 with `<mark class="live">`.
 
-## The three checks
+## The four checks
 
 ```sh
 grep -o 'font-size:[^;}]*' page.html | sort | uniq -c | sort -rn
 py notes/signoff/check_contrast.py            # must print ALL PASS
 py notes/signoff/check_prose.py page.html     # must print ALL WITHIN CAPS
+py notes/signoff/twemoji_inline.py page.html  # must print ALL DRAWN AS DISCORD DRAWS THEM
 ```
 
 The type audit must show only the six sizes in the contract, with `16px` on
-`body` the only `px`, no `em`, and **nothing below `1rem`**.
+`body` the only `px`, no `em` font sizes (the emoji images size in `em`, which is not a font size), and **nothing below `1rem`**.
 
 ## What must not be re-decided per session
 

@@ -15,6 +15,7 @@ A Discord bot built for **Last War alliance leadership** — event announcements
 - **📋 Surveys** — Members submit stats through a private Discord thread; responses save directly to your sheet, with a leadership notification per submission. Running a multilingual alliance? Point the bot at your translate bot and it gets added to each survey thread, so members who don't read English can translate the questions in place.
 - **📈 Growth tracking** — Snapshot any metric in your sheet (squad powers, THP, kills, anything) on a configurable schedule. You define the metrics, source, and cadence.
 - **🔁 Transfer management 💎** — Premium. The bot watches your recruiting sheet and pings you when new applicants land or their status changes, drafts your in-game outreach messages, optionally pulls matching players from a server-wide sheet, and (opt-in) writes your accept/decline decisions back to the sheet from Discord. Only a Name column is required; everything else maps to whatever your sheet already uses.
+- **🪪 Leadership Duties 💎**: Premium. Record which leaders are assigned to each duty and how the load is spread, remind them in your own words, and let members open a private thread with the right people.
 - **💎 Premium add-ons** — DM-based reminders, multi-survey, member roster sync, customizable DM bodies, unlimited templates and survey questions, threads as channel destinations.
 
 → Full command reference: [commands page](https://lw-alliance-helper.github.io/commands.html)
@@ -53,7 +54,7 @@ Every feature works on the **free tier** with sensible caps for a typical allian
 | Channel destinations | Text channels | Text channels and threads |
 | Storm participation lookback | 4 entries | Unlimited |
 | Alliance Duel (VS) | Track your own alliance: day scores, outcomes, head to head, trends | + your whole League bracket: Bracket, Scout, My Path, next-opponent and season-recap posts |
-| Premium-only features | — | Member Roster Sync · role-scoped Conductor Rotation days · birthday DMs · train assignment DMs · DM-based storm reminders · DM-based survey reminders · auto-mentions · customizable DM bodies · Transfer Management |
+| Premium-only features | — | Member Roster Sync · role-scoped Conductor Rotation days · birthday DMs · train assignment DMs · DM-based storm reminders · DM-based survey reminders · auto-mentions · customizable DM bodies · Transfer Management · Leadership Duties |
 
 Full comparison + complete premium-only feature list: [pricing page](https://lw-alliance-helper.github.io/pricing.html).
 

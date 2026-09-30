@@ -84,6 +84,11 @@ EXPECTED_COG_COMMANDS = {
         # import) are introspected in `test_export_import_cog_config_group_has_expected_subcommands`.
         "config",
     },
+    "DutiesCog": {
+        # Leadership Duties (#687): one hub command. Its reminder loop starts
+        # in cog_load, so constructing the cog here starts nothing.
+        "duties",
+    },
 }
 
 
@@ -348,6 +353,7 @@ class TestCogRegistration:
         from member_roster import MemberRosterCog
         from donate import DonateCog
         from export_import_cog import ExportImportCog
+        from duties_cog import DutiesCog
 
         for cog_class in (
             SetupCog,
@@ -356,6 +362,7 @@ class TestCogRegistration:
             MemberRosterCog,
             DonateCog,
             ExportImportCog,
+            DutiesCog,
         ):
             cog = _make_cog(cog_class)
             expected = EXPECTED_COG_COMMANDS[cog_class.__name__]
@@ -679,6 +686,27 @@ class TestTrainCommandsGate:
                     getattr(cog, loop_name).cancel()
                 except Exception:
                     pass
+
+
+# ── Leadership Duties ─────────────────────────────────────────────────────────
+
+
+class TestDutiesCommandGate:
+    """`/duties` is leadership only (#687): a member gets the standard
+    denial, not the hub."""
+
+    @pytest.mark.asyncio
+    async def test_rejects_caller_without_leadership_role(self, seeded_db):
+        from duties_cog import DutiesCog
+
+        cog = _make_cog(DutiesCog)
+        interaction = make_mock_interaction()
+        interaction.user.roles = []
+
+        await cog.duties.callback(cog, interaction)
+
+        content, _ = _last_message(interaction)
+        assert "leadership" in (content or "").lower()
 
 
 # ── Donate / Upgrade are unguarded (anyone can run them) ─────────────────────

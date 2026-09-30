@@ -276,43 +276,91 @@ class TestCheckDataButton:
         inter = MagicMock()
         inter.response = AsyncMock()
         inter.followup = AsyncMock()
-        with patch("alliance_duel_wizard.ads.load_rows", return_value=[]):
+        with (
+            patch("alliance_duel_wizard.ads.load_rows", return_value=[]),
+            patch("alliance_duel_wizard.premium.feature_gate", AsyncMock(return_value=True)),
+        ):
             await parent.btn_check_data.callback(inter)
 
-        embed = inter.followup.send.call_args.kwargs["embed"]
-        assert "looks right" in embed.title
+        kwargs = inter.followup.send.call_args.kwargs
+        assert kwargs["embed"].title == "✅ No errors found"
+        assert "view" not in kwargs  # nothing to fix, nothing to press
 
-    @pytest.mark.asyncio
-    async def test_runs_the_real_validator_against_loaded_rows(self, seeded_db, parent):
-        """Not a mock of `ad.validate` -- the point of this button is that
-        it actually runs the same check `validation_report_embed` renders,
-        so a real finding must actually surface."""
+    @staticmethod
+    def _mismatched_week():
+        """Week 1 of a live league, ABC 9 against DEF 5: rule 1."""
         import alliance_duel as ad
+
+        league = ad.LeagueKey("S36", "Diamond", "12 - 1")
+        monday = ad.week_monday(ad.server_today())
+        abc, deff = ad.AllianceKey.of("ABC", "1234"), ad.AllianceKey.of("DEF", "1234")
+        return [
+            ad.AllianceWeek(
+                league=league,
+                week=1,
+                alliance=abc,
+                week_date=monday,
+                ranking=1,
+                tag_display="ABC",
+                opponent=deff,
+                week_score=9,
+                row_number=2,
+            ),
+            ad.AllianceWeek(
+                league=league,
+                week=1,
+                alliance=deff,
+                week_date=monday,
+                ranking=2,
+                tag_display="DEF",
+                opponent=abc,
+                week_score=5,
+                row_number=3,
+            ),
+        ]
+
+    async def _press(self, parent, rows, *, premium=True):
         import config
 
         config.save_vs_config(
             TEST_GUILD_ID, tracking_mode="full_bracket", own_tag="ABC", own_warzone="1234"
         )
         parent.cfg = config.get_vs_config(TEST_GUILD_ID)
+        inter = MagicMock()
+        inter.user.id = OWNER_ID
+        inter.response = AsyncMock()
+        inter.followup = AsyncMock()
+        with (
+            patch("alliance_duel_wizard.ads.load_rows", return_value=rows),
+            patch("alliance_duel_wizard.premium.feature_gate", AsyncMock(return_value=premium)),
+        ):
+            await parent.btn_check_data.callback(inter)
+        return inter.followup.send.call_args.kwargs
 
-        # A day-outcome row whose two week scores don't sum to 13 (rule 1).
-        bad_row = MagicMock(spec=ad.AllianceWeek)
-        with patch("alliance_duel_wizard.ads.load_rows", return_value=[bad_row]):
-            with patch("alliance_duel_wizard.ad.validate") as mock_validate:
-                mock_validate.return_value = [
-                    ad.Finding(rule=1, severity=ad.SEVERITY_ERROR, message="test finding")
-                ]
-                inter = MagicMock()
-                inter.response = AsyncMock()
-                inter.followup = AsyncMock()
-                await parent.btn_check_data.callback(inter)
+    @pytest.mark.asyncio
+    async def test_a_real_finding_surfaces_with_a_button_that_fixes_it(self, seeded_db, parent):
+        """The real validator, not a mock: the point of the button is that a
+        real mistake reaches the officer, with the screen that fixes it."""
+        kwargs = await self._press(parent, self._mismatched_week())
 
-        embed = inter.followup.send.call_args.kwargs["embed"]
-        assert "test finding" in embed.description
-        mock_validate.assert_called_once()
-        _, kwargs = mock_validate.call_args
-        assert kwargs["tracking_mode"] == "full_bracket"
-        assert kwargs["own_alliance"] == ad.AllianceKey.of("ABC", "1234")
+        embed = kwargs["embed"]
+        assert embed.fields[0].name == "S36 Diamond 12 - 1"
+        assert "⚠️ **Week 1, ABC**: The two scores in this match add up to **14**" in (
+            embed.fields[0].value
+        )
+        assert embed.footer.text.startswith("Each button opens the screen")
+        labels = [c.label for c in kwargs["view"].children]
+        assert labels == ["Enter week 1 results"]
+
+    @pytest.mark.asyncio
+    async def test_a_lapsed_guild_is_checked_as_it_is_read(self, seeded_db, parent):
+        """Without Premium a whole-bracket sheet reads as own-alliance (#667),
+        so the bracket-only rules stand down here too."""
+        rows = self._mismatched_week()
+        rows[1].opponent = None  # rule 4 in full-bracket mode, silent in own-alliance
+        rows[1].week_score = None
+        kwargs = await self._press(parent, rows, premium=False)
+        assert kwargs["embed"].title == "✅ No errors found"
 
 
 class TestFindOrCreateTab:

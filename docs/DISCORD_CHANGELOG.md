@@ -125,6 +125,11 @@ accident.
 
 ---
 
+**1.9.4** — 2026-09-29
+- VS improvements including flagging errors, removing alliances, and a guide of where to find league information
+
+---
+
 **1.9.3** — 2026-09-28
 - New VS League history shows every alliance's scores across a past league
 - Shiny Tasks setup now picks a warzone group instead of a typed server range

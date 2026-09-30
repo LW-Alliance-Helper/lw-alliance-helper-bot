@@ -21,6 +21,7 @@ only thing that re-reads.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import datetime as _dt
 import logging
 
@@ -29,6 +30,8 @@ import discord
 import alliance_duel as ad
 import alliance_duel_analytics as an
 import alliance_duel_entry as ad_entry
+import alliance_duel_guide as ad_guide
+import alliance_duel_league_edit as ad_edit
 import alliance_duel_setup as ad_setup
 import alliance_duel_ui as ad_ui
 import config
@@ -108,21 +111,31 @@ async def attach_shared(state: "HubState") -> None:
     button that went back to a database would put the read-quota rule (#269)
     back where it started.
 
+    **Found by who is in the league and when, not by its label** (#658). The
+    game reuses a label for a later set of warzones, so the store is asked for
+    the league these alliance-weeks belong to, and what comes back is shown
+    under this guild's own label: it is the same league whatever another
+    server called it, and the screens match rows on `(league, week)`.
+
     Never raises. The store is a second copy; a guild's own sheet is unaffected
     by it being unreadable, and a scouting card with less on it is not worth
     interrupting somebody for.
     """
     if state.league is None:
         return
+    pairs = [(r.alliance, r.week_date) for r in state.league_rows() if r.week_date]
+    if not pairs:
+        return
     try:
         import alliance_duel_db as vsdb
 
         # SQLite blocks, and this runs on the gateway thread (#366).
-        shared = await asyncio.to_thread(vsdb.rows_for_league, state.league)
+        shared = await asyncio.to_thread(vsdb.rows_for_bracket, pairs)
     except Exception as e:  # noqa: BLE001 - the sheet is unaffected
         logger.warning("[VS] shared scouting unavailable for guild=%s: %s", state.guild_id, e)
         return
 
+    shared = [dataclasses.replace(r, league=state.league) for r in shared]
     state.shared = shared
     state.shared_profiles = ad.build_profiles(shared)
 
@@ -336,10 +349,12 @@ def hub_embed(state: HubState) -> discord.Embed:
     return embed
 
 
-#: The week view for a lapsed guild with no Opponent column filled in: the
-#: computed pairing is the Premium half, so there is nothing else to show.
+#: The week view for a lapsed guild with no matchups recorded: the computed
+#: pairing is the Premium half, so there is nothing else to show. Points at the
+#: Discord screen that records them, not the Sheet's Opponent column (#691,
+#: the same direction as #651). Signed off 29 Sep.
 VS_WEEK_NO_RECORDED_OPPONENTS = (
-    "No matchups recorded for this week yet. Add them in the Opponent column of your sheet."
+    f"No matchups recorded for this week yet. Add them with **{ad_entry.VS_BTN_BACKFILL_RESULTS}**."
 )
 
 
@@ -1279,14 +1294,8 @@ class VSHubView(OwnedView):
         log.callback = self._log_score
         self.add_item(log)
 
-        add = discord.ui.Button(
-            label=ad_entry.VS_BTN_ADD_ALLIANCE,
-            style=discord.ButtonStyle.secondary,
-            disabled=not has_league,
-            row=1,
-        )
-        add.callback = self._add_alliance
-        self.add_item(add)
+        # "Add or edit alliance" lives under Edit league on row 2 (#651), with
+        # removing one: that is where an officer changes what is in the league.
 
         # Push or save (#407). Needs a live week to declare anything about, so
         # between leagues it renders disabled rather than opening a view that
@@ -1329,12 +1338,22 @@ class VSHubView(OwnedView):
             fresh.callback = self._new_league
             self.add_item(fresh)
 
+            # Beside the button it explains, and only while that button is
+            # there (#655): the modal cannot say where the tags and warzones
+            # are in the game, and this is the moment somebody needs to know.
+            guide = discord.ui.Button(
+                label=ad_guide.VS_BTN_LEAGUE_GUIDE, style=discord.ButtonStyle.secondary, row=1
+            )
+            guide.callback = self._league_guide
+            self.add_item(guide)
+
         setup = discord.ui.Button(label=VS_BTN_SETUP, style=discord.ButtonStyle.secondary, row=1)
         setup.callback = self._setup
         self.add_item(setup)
 
-        # Row 1 is full at five. Backfilling a week is its own row rather than
-        # a corner of another screen, since it is reached by week, not by "today".
+        # Row 2 is the league-maintenance row. Backfilling a week is its own
+        # button rather than a corner of another screen, since it is reached by
+        # week, not by "today".
         backfill = discord.ui.Button(
             label=ad_entry.VS_BTN_BACKFILL_RESULTS,
             style=discord.ButtonStyle.secondary,
@@ -1354,7 +1373,7 @@ class VSHubView(OwnedView):
         self.add_item(rank)
 
         edit_league = discord.ui.Button(
-            label=ad_entry.VS_BTN_EDIT_LEAGUE,
+            label=ad_edit.VS_BTN_EDIT_LEAGUE_MENU,
             style=discord.ButtonStyle.secondary,
             disabled=not has_league,
             row=2,
@@ -1377,13 +1396,17 @@ class VSHubView(OwnedView):
         if await self._own_alliance_only(
             interaction,
             "League history compares every alliance in a league, and you are "
-            "tracking just your own.",
+            "tracking just your own. Tracking all 16 alliances adds "
+            f"{ad_setup.VS_FULL_BRACKET_ADDS}",
         ):
             return
         await open_league_history_picker(interaction, self.state)
 
+    async def _league_guide(self, interaction: discord.Interaction):
+        await ad_guide.send_guide(interaction)
+
     async def _edit_league(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(ad_entry.EditLeagueModal(self.state))
+        await ad_edit.open_edit_league(interaction, self.state)
 
     async def _set_rank(self, interaction: discord.Interaction):
         view = ad_entry.AllianceRankWeekPickerView(self.state, interaction.user.id)
@@ -1402,6 +1425,9 @@ class VSHubView(OwnedView):
     async def _own_alliance_only(self, interaction: discord.Interaction, detail: str) -> bool:
         """Explain a whole-bracket view to a paying guild tracking just itself.
 
+        `detail` is the view's whole first paragraph (#691): what it needs, then
+        what tracking the bracket adds.
+
         Without Premium these buttons are disabled, so only a paying guild gets
         here, and what it is missing is the mode, not the tier.
         """
@@ -1416,9 +1442,11 @@ class VSHubView(OwnedView):
         return True
 
     async def _bracket(self, interaction: discord.Interaction):
+        # Kevin's wording, 29 Sep (#691).
         if await self._own_alliance_only(
             interaction,
-            "The bracket view shows all 16 alliances, and you are tracking just your own.",
+            "You are only tracking your own alliance. Bracket view requires tracking all "
+            f"16 alliances to add {ad_setup.VS_FULL_BRACKET_ADDS}",
         ):
             return
         await interaction.response.send_message(
@@ -1439,7 +1467,8 @@ class VSHubView(OwnedView):
         if await self._own_alliance_only(
             interaction,
             "Working out your path needs every alliance in the bracket, "
-            "and you are tracking just your own.",
+            "and you are tracking just your own. Tracking all 16 alliances adds "
+            f"{ad_setup.VS_FULL_BRACKET_ADDS}",
         ):
             return
         view = VSPathView(self.state, interaction.user.id)
@@ -1465,10 +1494,6 @@ class VSHubView(OwnedView):
         await interaction.response.send_modal(
             ad_entry.ScoreModal(self.state, week, day, ad_entry.own_opponent(self.state, week))
         )
-
-    async def _add_alliance(self, interaction: discord.Interaction):
-        week = self.state.week or 1
-        await interaction.response.send_modal(ad_entry.AllianceModal(self.state, week))
 
     async def _trends(self, interaction: discord.Interaction):
         await interaction.response.send_message(

@@ -2,7 +2,7 @@
 
 Creates the `Alliance Duel (VS)` tab, walks leadership through the one
 question that cannot be inferred, explains the columns with a worked example,
-and renders the "Check my sheet" report.
+and renders the "Check my data for errors" report (#651).
 
 Split from `alliance_duel.py` on the same seam as `transfer.py` /
 `transfer_setup.py`: the pure data layer stays Discord-free and this module
@@ -22,6 +22,7 @@ Conventions this follows, per `UX.md` and `DESIGN.md`:
 
 from __future__ import annotations
 
+import datetime as _dt
 import logging
 
 import discord
@@ -465,64 +466,111 @@ def _clock(hhmm: str) -> str:
 
 
 # ── Validation report ─────────────────────────────────────────────────────────
+#
+# Signed off 28 Sep (#651). A problem in the current league is fixed from the
+# Discord screen that wrote it, so its line never points at the Sheet. An
+# earlier league has no such screen (every one writes into the current
+# league), so there, and only there, the report sends the officer to their
+# Sheet and says which row: the bot is not the only way to edit, and saying
+# nothing would read as though there were no way at all (Kevin, 28 Sep).
+
+VS_CHECK_CLEAN_TITLE = "✅ No errors found"
+VS_CHECK_CLEAN_BODY = "I checked **{weeks}** across **{leagues}** and found nothing to fix."
+VS_CHECK_PROBLEMS_TITLE = "⚠️ Some of your data needs a look"
+# Signed off 28 Sep, round two of the second #651 page.
+VS_CHECK_PAST_LEAGUE = "This League is over, so fix these in your Sheet, on the **{tab}** tab."
+VS_CHECK_SHEET_ROW = "(row {row})"
+VS_CHECK_FOOTER = (
+    "Each button opens the screen that fixes it. Run the check again when you're done."
+)
 
 
-def _finding_line(finding: ad.Finding) -> str:
-    """One finding as a bullet. Location first, because the reader is about to
-    go and look at it."""
+def finding_line(finding: ad.Finding, *, with_row: bool = False) -> str:
+    """One finding as a bullet, led by the week and alliance it concerns.
+
+    The league is not on the line: the full report puts it in the heading
+    above, and the after-save check only ever concerns the one league it saved.
+    """
     # One glyph for both severities, per `notes/DESIGN.md` emoji rule 8: the
-    # words carry the difference, not the icon. The embed already says which
-    # is which twice over — the summary counts them separately ("3 things to
+    # words carry the difference, not the icon. The report already says which
+    # is which twice over: the summary counts them separately ("3 things to
     # fix, 2 worth a look") and the colour goes red when any error is present.
-    where = finding.where or "your sheet"
-    return f"⚠️ **{where}**: {finding.message}"
+    parts = []
+    if finding.week:
+        parts.append(f"Week {finding.week}")
+    if finding.alliance_display:
+        parts.append(finding.alliance_display)
+    row = (
+        " " + VS_CHECK_SHEET_ROW.format(row=finding.row_number)
+        if with_row and finding.row_number
+        else ""
+    )
+    if not parts:
+        return f"⚠️{row} {finding.message}" if row else f"⚠️ {finding.message}"
+    return f"⚠️ **{', '.join(parts)}**{row}: {finding.message}"
+
+
+def more_findings_line(hidden: int) -> str:
+    return (
+        f"…and {hidden} more. Fixing the ones above often clears several at once, "
+        "so check again afterwards."
+    )
+
+
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}{'s' if n != 1 else ''}"
+
+
+def _league_order(rows) -> list:
+    """Leagues newest first, by the latest week date recorded in each."""
+    latest: dict = {}
+    for row in rows:
+        stamp = row.week_date or _dt.date.min
+        if row.league not in latest or stamp > latest[row.league]:
+            latest[row.league] = stamp
+    return sorted(latest, key=lambda league: latest[league], reverse=True)
 
 
 def validation_report_embed(
     findings: list[ad.Finding],
     *,
-    tracking_mode: str = ad.MODE_FULL_BRACKET,
-    rows_checked: int = 0,
+    rows=(),
+    has_buttons: bool = False,
+    current_league: ad.LeagueKey | None = None,
+    tab_name: str = "",
 ) -> discord.Embed:
-    """Render "Check my sheet".
+    """Render "Check my data for errors".
 
     Clamped to :data:`MAX_FINDINGS_SHOWN`. One systematic mistake across a
     64-row league produces hundreds of findings, which would exceed the
     4096-character description limit and bury the first one worth fixing.
     The count is always honest about how many were left out.
 
-    A clean sheet is reported in green and says what was checked, so the
-    officer knows the check ran rather than wondering if it did.
+    A clean result is reported in green and says what was checked, in weeks
+    and Leagues rather than rows, so the officer knows the check ran.
+
+    `has_buttons` decides the closing line: it tells the reader what the
+    buttons do, which is wrong when every finding is in an earlier league and
+    so has none.
+
+    A league other than `current_league` is one no screen can edit, so its
+    heading carries a pointer to `tab_name` in the Sheet and its lines their
+    Sheet row. Without a `current_league` no league is treated as past.
     """
+    rows = list(rows)
     if not findings:
-        embed = discord.Embed(
-            title="✅ Your sheet looks right",
-            description=(
-                f"Checked {rows_checked} row{'s' if rows_checked != 1 else ''} "
-                "and found nothing to fix."
+        weeks = len({(r.league, r.week) for r in rows})
+        leagues = len({r.league for r in rows})
+        return discord.Embed(
+            title=VS_CHECK_CLEAN_TITLE,
+            description=VS_CHECK_CLEAN_BODY.format(
+                weeks=_plural(weeks, "week"), leagues=_plural(leagues, "League")
             ),
             color=discord.Color.green(),
         )
-        if tracking_mode == ad.MODE_OWN_ALLIANCE:
-            embed.set_footer(
-                text=(
-                    "Tracking just your alliance, so bracket checks "
-                    "(reciprocal opponents, rankings) were skipped."
-                )
-            )
-        return embed
 
     errors = [f for f in findings if f.severity == ad.SEVERITY_ERROR]
     warnings = [f for f in findings if f.severity == ad.SEVERITY_WARNING]
-
-    shown = findings[:MAX_FINDINGS_SHOWN]
-    lines = [_finding_line(f) for f in shown]
-    hidden = len(findings) - len(shown)
-    if hidden:
-        lines.append(
-            f"\n…and {hidden} more. Fixing the ones above often clears several "
-            "at once, so check again afterwards."
-        )
 
     summary = []
     if errors:
@@ -531,15 +579,43 @@ def validation_report_embed(
         summary.append(f"{len(warnings)} worth a look")
 
     embed = discord.Embed(
-        title="⚠️ Your sheet needs a look",
-        description=f"{', '.join(summary)}.\n\n" + "\n".join(lines),
+        title=VS_CHECK_PROBLEMS_TITLE,
+        description=f"{', '.join(summary)}.",
         color=discord.Color.orange() if not errors else discord.Color.red(),
     )
-    # Description has a hard 4096 cap and alliance-supplied tags ride in these
-    # messages, so clamp rather than trust the finding count alone.
-    if len(embed.description) > 4000:
-        embed.description = embed.description[:3990] + "\n…"
-    embed.set_footer(text="Fix these in your sheet, then run the check again.")
+
+    shown = findings[:MAX_FINDINGS_SHOWN]
+    by_league: dict = {}
+    for f in shown:
+        by_league.setdefault(f.league, []).append(f)
+    order = [lg for lg in _league_order(rows) if lg in by_league]
+    order += [lg for lg in by_league if lg not in order]
+
+    fields = []
+    for league in order:
+        name = str(league) if league is not None else "Your data"
+        past = None not in (league, current_league) and league != current_league
+        value = VS_CHECK_PAST_LEAGUE.format(tab=tab_name or "Alliance Duel (VS)") if past else ""
+        for line in (finding_line(f, with_row=past) for f in by_league[league]):
+            # A field holds 1024 characters, and tags are alliance-supplied.
+            if len(value) + len(line) + 1 > 1000:
+                value += "\n…"
+                break
+            value += ("\n" if value else "") + line
+        fields.append([name[:256], value])
+
+    hidden = len(findings) - len(shown)
+    if hidden and fields:
+        more = more_findings_line(hidden)
+        if len(fields[-1][1]) + len(more) + 2 <= 1024:
+            fields[-1][1] += "\n\n" + more
+        else:
+            embed.description += "\n\n" + more
+
+    for name, value in fields:
+        embed.add_field(name=name, value=value, inline=False)
+    if has_buttons:
+        embed.set_footer(text=VS_CHECK_FOOTER)
     return embed
 
 
@@ -569,6 +645,13 @@ def fill_bracket_embed(league: ad.LeagueKey, missing: dict) -> discord.Embed:
     return embed
 
 
+#: What tracking the whole bracket adds, ending every "needs the full bracket"
+#: paragraph. One copy, so the views cannot drift apart on it (#691).
+VS_FULL_BRACKET_ADDS = (
+    "your projected path, who you're likely to face next, and which alliances to scout first."
+)
+
+
 def upsell_embed(reason: ad.BracketIncomplete) -> discord.Embed:
     """What a bracket-dependent view shows when the bracket isn't there.
 
@@ -581,13 +664,19 @@ def upsell_embed(reason: ad.BracketIncomplete) -> discord.Embed:
       is absent and where to put it.
     """
     if reason.is_choice:
+        # Each view says in its own words what it needs (#691): the caller's
+        # `detail` is the whole first paragraph, so Bracket, My path and League
+        # history no longer show one word-for-word message. Signed off 29 Sep;
+        # Bracket's paragraph is Kevin's wording. The generic paragraph covers
+        # a caller that sends none.
+        opening = reason.detail or (
+            "You're tracking just your alliance, so there's no bracket to project "
+            f"through. Tracking all 16 alliances adds {VS_FULL_BRACKET_ADDS}"
+        )
         return discord.Embed(
             title="🏆 This view needs the full bracket",
             description=(
-                "You're tracking just your alliance, so there's no bracket to "
-                "project through. Tracking all 16 alliances adds your "
-                "projected path, who you're likely to face next, and which "
-                "alliances to scout first.\n\n"
+                f"{opening}\n\n"
                 f"Switch any time from {VS_SETUP_NAV}. Doing it mid league "
                 "offers to fill in the rows you skipped."
             ),

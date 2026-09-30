@@ -1127,6 +1127,7 @@ def init_db():
 
         duties_db.create_tables(conn)
         conn.commit()
+        _standardize_vs_labels(conn)
 
         # Add spreadsheet_id column if upgrading from an older schema that didn't have it
         try:
@@ -6643,6 +6644,62 @@ def mark_vs_event_posted(guild_id: int, kind: str, event_key: str) -> None:
             (guild_id, kind, event_key, _dt.datetime.now(_dt.timezone.utc).isoformat()),
         )
         conn.commit()
+
+
+def _standardize_vs_labels(conn) -> None:
+    """Bring stored VS league labels to the standardized form (#658).
+
+    `alliance_duel.LeagueKey` standardizes every label it is built from
+    (`S37`, `12 - 1`), so a score prompt posted this week under `12-1`, or an
+    announcement recorded under it, would no longer match the league the
+    Sheet now reads as: the prompt refused as belonging to an old league
+    (#634's refusal), the announcement sent a second time. Run at every
+    start, because it is idempotent and both tables are small.
+
+    An event key whose standardized form is already recorded is the same
+    announcement twice, so the old spelling is dropped rather than renamed
+    into a primary-key collision.
+    """
+    import vs_labels
+
+    try:
+        for row in conn.execute(
+            "SELECT id, league_season, league_tier, league_group FROM vs_score_prompt_posts"
+        ).fetchall():
+            new = (
+                vs_labels.standard_season(row["league_season"]),
+                vs_labels.standard_tier(row["league_tier"]),
+                vs_labels.standard_group(row["league_group"]),
+            )
+            if new != (row["league_season"], row["league_tier"], row["league_group"]):
+                conn.execute(
+                    "UPDATE vs_score_prompt_posts SET league_season = ?, league_tier = ?, "
+                    "league_group = ? WHERE id = ?",
+                    (*new, row["id"]),
+                )
+        for row in conn.execute(
+            "SELECT rowid, guild_id, kind, event_key FROM vs_event_posts"
+        ).fetchall():
+            new_key = vs_labels.standard_key(row["event_key"])
+            if new_key == row["event_key"]:
+                continue
+            taken = conn.execute(
+                "SELECT 1 FROM vs_event_posts WHERE guild_id = ? AND kind = ? AND event_key = ?",
+                (row["guild_id"], row["kind"], new_key),
+            ).fetchone()
+            if taken:
+                conn.execute("DELETE FROM vs_event_posts WHERE rowid = ?", (row["rowid"],))
+            else:
+                conn.execute(
+                    "UPDATE vs_event_posts SET event_key = ? WHERE rowid = ?",
+                    (new_key, row["rowid"]),
+                )
+        conn.commit()
+    except Exception as e:
+        # A league whose prompts read as stale is recoverable from the hub; a
+        # bot that will not start is not.
+        conn.rollback()
+        print(f"[CONFIG] VS label standardization skipped: {e}")
 
 
 def vs_league_key(season: str, tier: str, group: str) -> str:

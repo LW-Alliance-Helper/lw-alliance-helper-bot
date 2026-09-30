@@ -376,8 +376,8 @@ HELP_CATEGORIES: dict[str, dict] = {
                 "your record against them, and how the week projects), 🛣️ My "
                 "path (your route through the bracket, and which alliances to "
                 "scout first when it cannot be worked out yet).\n"
-                "**Write row:** ✏️ Enter daily score, ➕ Add or edit alliance, "
-                "and setup with a sheet check.",
+                "**Write row:** ✏️ Enter daily score, ✏️ Edit league (its details, "
+                "and adding or removing an alliance), and setup with a check of your data.",
             ),
         ],
     },

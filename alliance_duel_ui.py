@@ -187,7 +187,7 @@ def _rows_for_history(state, alliance: ad.AllianceKey) -> list[ad.AllianceWeek]:
     anything the shared store (#544) has that isn't already covered.
 
     **`state.shared` only ever holds the currently loaded league** --
-    `attach_shared` reads `vsdb.rows_for_league(state.league)`, not a
+    `attach_shared` reads `vsdb.rows_for_bracket` for that league, not a
     per-alliance history, the same scope every other shared-store field on
     this card already lives with. So a stranger alliance's *current* league
     can show up here even when we have never played them, but their older

@@ -33,6 +33,9 @@ import examples
 import discord
 
 import alliance_duel as ad
+import alliance_duel_fixes as ad_fixes
+import alliance_duel_guide as ad_guide
+import alliance_duel_league_edit as ad_edit
 import alliance_duel_setup as ad_setup
 import config
 import config_health
@@ -126,8 +129,35 @@ async def save_rows(state, rows: list[ad.AllianceWeek], *, actor=None, observed=
             f"**{ad_setup.VS_SETUP_NAV}** for the column guide."
         )
 
-    _patch_snapshot(state, rows)
+    _patch_and_check(state, rows)
     return ""
+
+
+def _patch_and_check(state, rows: list[ad.AllianceWeek]) -> None:
+    """Patch the snapshot, and keep what the patch newly got wrong (#651).
+
+    Validated before and after, both in memory with no Sheet read, and only the
+    difference is kept on `state.new_findings` for the screen that saved to
+    post under its confirmation (`alliance_duel_fixes.send_new_findings`).
+    Everything that changed between the two runs is this save's doing, so the
+    difference is exactly "what the save wrote", whoever's alliance it was.
+
+    A failing check costs the officer the warning, never the save: the rows are
+    already in their tab.
+    """
+    try:
+        before = ad_fixes.state_findings(state)
+    except Exception:  # noqa: BLE001 - see docstring
+        logger.exception("[VS] check before save failed for guild=%s", state.guild_id)
+        before = None
+    _patch_snapshot(state, rows)
+    state.new_findings = []
+    if before is None:
+        return
+    try:
+        state.new_findings = ad.new_findings(before, ad_fixes.state_findings(state))
+    except Exception:  # noqa: BLE001 - see docstring
+        logger.exception("[VS] check after save failed for guild=%s", state.guild_id)
 
 
 async def _mirror_centrally(state, rows: list[ad.AllianceWeek], *, actor=None) -> None:
@@ -457,6 +487,7 @@ class ScoreModal(discord.ui.Modal):
             return
 
         await interaction.followup.send(embed=_score_ack(state, self.week, day), ephemeral=True)
+        await ad_fixes.send_new_findings(interaction, state)
 
         # The officer already has their answer, so anything the alliance opted
         # into is announced afterwards and cannot delay or break the save.
@@ -572,8 +603,9 @@ class AllianceModal(discord.ui.Modal, title="Add or edit an alliance"):
         alliance = ad.AllianceKey.of(self.tag.value, self.warzone.value)
         if alliance is None:
             await interaction.followup.send(
-                "⚠️ An alliance needs both a tag and a warzone. Run `/vs` and click "
-                f"**{VS_BTN_ADD_ALLIANCE}** to try again.",
+                "⚠️ An alliance needs both a tag and a warzone. Run `/vs` → "
+                f"**{ad_edit.VS_BTN_EDIT_LEAGUE_MENU}** → **{VS_BTN_ADD_ALLIANCE}** "
+                "to try again.",
                 ephemeral=True,
             )
             return
@@ -615,6 +647,7 @@ class AllianceModal(discord.ui.Modal, title="Add or edit an alliance"):
         await interaction.followup.send(
             embed=embed, view=DetailsLaunchView(state, alliance, self.week), ephemeral=True
         )
+        await ad_fixes.send_new_findings(interaction, state)
 
 
 class AllianceDetailsModal(discord.ui.Modal, title="Notes on this alliance"):
@@ -800,6 +833,7 @@ class ScoutActionsView(OwnedView):
             await interaction.followup.send(
                 f"✅ Picked **{side}** for week {self.week}.", ephemeral=True
             )
+            await ad_fixes.send_new_findings(interaction, self.state)
 
         return _pick
 
@@ -867,6 +901,15 @@ async def generate_next_week(state, week: int, bot=None) -> tuple[bool, str]:
 # ── A new league ──────────────────────────────────────────────────────────────
 
 VS_BTN_NEW_LEAGUE = "➕ Start a new league"
+
+#: Under the bracket box's label: the order, and which fields are required.
+#: Kevin's wording, 29 Sep (#655); 99 of the 100 characters a description
+#: holds. The count is not repeated here: the box refuses anything but 16 with
+#: its own message.
+VS_BRACKET_DESCRIPTION = (
+    "Tag and warzone (required) then power, gift level and members (optional)\n"
+    f"e.g.: {examples.TAG} {examples.WARZONE} 26.8b 25 100"
+)
 
 #: The tiers the game has, as far as Kevin's alliance has seen them (19 Sep).
 #: Shared with `EditLeagueModal` so both surfaces offer the same list.
@@ -962,14 +1005,11 @@ class NewLeagueModal(discord.ui.Modal, title="Start a new league"):
                 default=d.get("bracket"),
             )
             self._bracket_label = discord.ui.Label(
-                text="The bracket, in League order",
-                # Worded on sign-off (2026-09-27); 99 of the 100 characters a
-                # Label description holds.
-                description=(
-                    "[tag] [warzone] [power] [gift level] [members]\n"
-                    f"e.g.: {examples.TAG} {examples.WARZONE} 26.8b 25 100\n"
-                    "Add all 16, one per line."
-                ),
+                text="The bracket, one per line, in League order",
+                # Says what is required and what is not (#655): only the tag
+                # and warzone are, and the old "[tag] [warzone] [power] ..."
+                # read as five required fields.
+                description=VS_BRACKET_DESCRIPTION,
                 component=self.bracket,
             )
         else:
@@ -1052,6 +1092,7 @@ class NewLeagueModal(discord.ui.Modal, title="Start a new league"):
             await self._refuse(interaction, f"⚠️ {message}")
             return
         await interaction.followup.send(f"✅ {message}", ephemeral=True)
+        await ad_fixes.send_new_findings(interaction, state)
 
 
 VS_BTN_RETRY_NEW_LEAGUE = "✏️ Edit and try again"
@@ -1073,8 +1114,19 @@ class _RetryNewLeagueView(OwnedView):
         button.callback = self._retry
         self.add_item(button)
 
+        # A refused paste is where somebody who does not know where the game
+        # shows a warzone finds out they needed to (#655).
+        guide = discord.ui.Button(
+            label=ad_guide.VS_BTN_LEAGUE_GUIDE, style=discord.ButtonStyle.secondary
+        )
+        guide.callback = self._guide
+        self.add_item(guide)
+
     async def _retry(self, interaction: discord.Interaction):
         await interaction.response.send_modal(NewLeagueModal(self.state, defaults=self.defaults))
+
+    async def _guide(self, interaction: discord.Interaction):
+        await ad_guide.send_guide(interaction)
 
 
 def _parse_new_league_bracket(state, text) -> ad.BracketParse:
@@ -2008,6 +2060,7 @@ class PredictionsView(OwnedView):
             PREDICT_SAVED.format(n=saved, s="" if saved == 1 else "s", matches=", ".join(called)),
             ephemeral=True,
         )
+        await ad_fixes.send_new_findings(interaction, self.state)
 
     async def _cancel(self, interaction: discord.Interaction):
         self.staged.clear()
@@ -2453,6 +2506,7 @@ class OtherResultsModal(discord.ui.Modal):
             + ", ".join(said),
             ephemeral=True,
         )
+        await ad_fixes.send_new_findings(interaction, self.state)
 
 
 class _RetryResultsView(OwnedView):
@@ -2653,3 +2707,4 @@ class AllianceRankModal(discord.ui.Modal):
             ),
             ephemeral=True,
         )
+        await ad_fixes.send_new_findings(interaction, self.state)

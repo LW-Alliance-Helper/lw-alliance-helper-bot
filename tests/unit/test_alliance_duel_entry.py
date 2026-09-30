@@ -675,7 +675,12 @@ def test_a_refusal_hands_back_a_retry_rather_than_a_command_to_re_run():
     assert "Run `/vs`" not in source, "a refusal must not send them back to the command"
 
     view = entry._RetryNewLeagueView(_state([]), 1, {"season": "S36"})
-    assert [b.label for b in view.children] == [entry.VS_BTN_RETRY_NEW_LEAGUE]
+    # The guide sits beside the retry: a refused paste is where somebody who
+    # did not know where the game shows a warzone finds out (#655).
+    assert [b.label for b in view.children] == [
+        entry.VS_BTN_RETRY_NEW_LEAGUE,
+        entry.ad_guide.VS_BTN_LEAGUE_GUIDE,
+    ]
 
 
 def test_the_retry_modal_still_holds_what_was_typed():
@@ -698,16 +703,13 @@ def test_the_bracket_format_survives_typing():
     and isn't cleared by anything the user types."""
     modal = entry.NewLeagueModal(_state([]))
 
-    assert modal._bracket_label.text == "The bracket, in League order"
+    assert modal._bracket_label.text == "The bracket, one per line, in League order"
     description = modal._bracket_label.description
-    assert "tag" in description and "warzone" in description
+    assert "tag" in description.lower() and "warzone" in description
     assert "power" in description and "gift" in description and "members" in description
-    # The wording signed off on 2026-09-27, inside Discord's 100 characters.
-    assert description == (
-        "[tag] [warzone] [power] [gift level] [members]\n"
-        "e.g.: Glo 999 26.8b 25 100\n"
-        "Add all 16, one per line."
-    )
+    # Says which fields are required (#655), inside Discord's 100 characters.
+    assert "optional" in description
+    assert description == entry.VS_BRACKET_DESCRIPTION
     assert len(description) <= 100
     # The wrapper is transparent to reads: `_typed()` (and `on_submit`) still
     # go through `self.bracket`, not the Label, so what Discord fills in on
@@ -1682,7 +1684,7 @@ async def test_rename_league_edits_identity_cells_in_place_not_a_new_row(_rename
     # Row 2 -- the header is row 1, the one alliance is the only data row.
     assert values[f"{transfer_col(ad.COL_TIER)}2"] == "Diamond"
     assert values[f"{transfer_col(ad.COL_SEASON)}2"] == "S36"
-    assert values[f"{transfer_col(ad.COL_GROUP)}2"] == "12-1"
+    assert values[f"{transfer_col(ad.COL_GROUP)}2"] == "12 - 1"
 
 
 def transfer_col(name: str) -> str:
@@ -1859,7 +1861,7 @@ def test_edit_league_modal_defaults_to_the_current_tier():
     modal = entry.EditLeagueModal(state)
 
     assert modal.season.default == "S36"
-    assert modal.group.default == "12-1"
+    assert modal.group.default == "12 - 1"
     # "Diamon" is not one of the three real tiers, so nothing is pre-selected
     # -- there is no honest default for a typo.
     assert not any(opt.default for opt in modal.tier.options)
@@ -2202,6 +2204,12 @@ async def test_a_tab_missing_a_column_still_contributes_to_the_shared_record(
     assert _central.weeks_for_alliance(OWN)[0]["week_score"] == 7
 
 
+def _stored_week(vsdb, week: int) -> list:
+    """Every stored row for this week number, whoever recorded it."""
+    with vsdb._get_conn() as conn:
+        return conn.execute("SELECT * FROM alliance_weeks WHERE week = ?", (week,)).fetchall()
+
+
 @pytest.mark.asyncio
 async def test_a_predicted_pairing_never_reaches_the_shared_record(_sheet_takes_it, _central):
     """The bot writes next week's *expected* opponents forward. That belongs in
@@ -2216,7 +2224,7 @@ async def test_a_predicted_pairing_never_reaches_the_shared_record(_sheet_takes_
     ok, message = await entry.generate_next_week(state, 1)
 
     assert ok, message
-    assert _central.weeks_for_league(LEAGUE, week=2) == [], "a guess was shared as fact"
+    assert _stored_week(_central, 2) == [], "a guess was shared as fact"
 
 
 @pytest.mark.asyncio
@@ -2227,7 +2235,7 @@ async def test_an_observed_result_does_reach_it(_sheet_takes_it, _central):
 
     await entry.save_rows(state, [_row(OWN_TAG, week=2, week_score=7)])
 
-    assert len(_central.weeks_for_league(LEAGUE, week=2)) == 1
+    assert len(_stored_week(_central, 2)) == 1
 
 
 def test_two_alliances_sharing_a_tag_are_still_two_alliances():

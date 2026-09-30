@@ -20,6 +20,7 @@ import discord
 
 import alliance_duel as ad
 import alliance_duel_entry as ad_entry
+import alliance_duel_fixes as ad_fixes
 from wizard_registry import OwnedView
 
 #: Multi-step work, per the DESIGN.md timeout tiers: a week is eight matches.
@@ -322,3 +323,6 @@ class ResultsBuilderView(OwnedView):
             await interaction.delete_original_response()
         except discord.HTTPException:
             pass
+        # After the builder is gone, so a problem the save created is the last
+        # thing on screen, under the list it qualifies (#651).
+        await ad_fixes.send_new_findings(interaction, self.state)

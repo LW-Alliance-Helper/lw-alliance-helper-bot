@@ -126,11 +126,7 @@ accident.
 ---
 
 **1.9.4** — 2026-09-29
-- VS saves now flag anything that doesn't add up, with a button to fix it
-- Remove an alliance entered by mistake from Edit league on `/vs`
-- A new guide shows where to find each alliance's details in the game
-- The new-league paste box accepts lines exactly as the game shows them
-- VS scouting no longer mixes in a different league that shares your league's name
+- VS improvements including flagging errors, removing alliances, and a guide of where to find league information
 
 ---
 

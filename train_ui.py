@@ -17,8 +17,11 @@ from datetime import date, timedelta
 import discord
 
 import wizard_registry
+from messages import TRAIN_SCHEDULE_UNREADABLE
 from time_helpers import server_today
 from train import (
+    ScheduleUnreadable,
+    _train_tab_name,
     active_wizards,
     WIZARD_TIMEOUT,
     ThemeSelectView,
@@ -196,7 +199,11 @@ async def run_blurb_wizard_for_entry(
                 )  # may stay None if user picked nothing → falls back to default
 
         # Persist back to schedule
-        schedule = await asyncio.to_thread(load_schedule, guild_id)
+        try:
+            schedule = await asyncio.to_thread(load_schedule, guild_id, strict=True)
+        except ScheduleUnreadable:
+            await channel.send(TRAIN_SCHEDULE_UNREADABLE.format(tab=_train_tab_name(guild_id)))
+            return False
         schedule[date_str] = {
             "name": name,
             "theme": theme,
@@ -299,7 +306,14 @@ class AddEntryModal(discord.ui.Modal, title="Add Train Entry"):
         await interaction.response.defer(ephemeral=True)
 
         d_iso = d.isoformat()
-        schedule = await asyncio.to_thread(load_schedule, self.guild_id)
+        try:
+            schedule = await asyncio.to_thread(load_schedule, self.guild_id, strict=True)
+        except ScheduleUnreadable:
+            await interaction.followup.send(
+                TRAIN_SCHEDULE_UNREADABLE.format(tab=_train_tab_name(self.guild_id)),
+                ephemeral=True,
+            )
+            return
         existed = d_iso in schedule
         existing = schedule.get(d_iso, {})
         schedule[d_iso] = {
@@ -368,7 +382,14 @@ class UpdateEntryModal(discord.ui.Modal, title="Update Train Entry"):
         await interaction.response.defer(ephemeral=True)
 
         new_iso = d.isoformat()
-        schedule = await asyncio.to_thread(load_schedule, self.guild_id)
+        try:
+            schedule = await asyncio.to_thread(load_schedule, self.guild_id, strict=True)
+        except ScheduleUnreadable:
+            await interaction.followup.send(
+                TRAIN_SCHEDULE_UNREADABLE.format(tab=_train_tab_name(self.guild_id)),
+                ephemeral=True,
+            )
+            return
 
         # Preserve theme/tone/notes/prompt_retrieved from the original entry
         merged = {

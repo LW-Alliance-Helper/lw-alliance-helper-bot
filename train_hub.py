@@ -297,11 +297,25 @@ async def _render_prompt_log(bot, interaction: discord.Interaction):
 
 
 async def _run_birthday_check(bot, interaction: discord.Interaction):
-    from train import load_schedule, save_schedule, check_and_add_birthdays, BIRTHDAY_LOOKAHEAD
+    from train import (
+        BIRTHDAY_LOOKAHEAD,
+        ScheduleUnreadable,
+        _train_tab_name,
+        check_and_add_birthdays,
+        load_schedule,
+        save_schedule,
+    )
+    from messages import TRAIN_SCHEDULE_UNREADABLE
 
     await interaction.response.defer(ephemeral=True, thinking=True)
     guild_id = interaction.guild_id
-    schedule = await asyncio.to_thread(load_schedule, guild_id)
+    try:
+        schedule = await asyncio.to_thread(load_schedule, guild_id, strict=True)
+    except ScheduleUnreadable:
+        await interaction.followup.send(
+            TRAIN_SCHEDULE_UNREADABLE.format(tab=_train_tab_name(guild_id)), ephemeral=True
+        )
+        return
     before = len(schedule)
     updated, alerts = await asyncio.to_thread(check_and_add_birthdays, schedule, guild_id)
     added = len(updated) - before

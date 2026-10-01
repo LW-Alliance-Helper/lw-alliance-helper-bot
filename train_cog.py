@@ -10,6 +10,7 @@ Kept separate from train.py to keep that file at a manageable size.
 """
 
 import asyncio
+import functools
 from datetime import datetime, timedelta, date
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -19,10 +20,12 @@ from discord.ext import commands, tasks
 
 import config_health
 from config import get_config
-from messages import SETUP_POINTER_FOOTER
+from messages import SETUP_POINTER_FOOTER, TRAIN_SCHEDULE_UNREADABLE
 from setup_hub import HUB_BTN_BIRTHDAYS, HUB_BTN_TRAIN
 from time_helpers import local_today
 from train import (
+    ScheduleUnreadable,
+    _train_tab_name,
     ET,
     active_wizards,
     ReminderView,
@@ -196,7 +199,16 @@ class BirthdayConflictView(ExpiringView):
         conflict = self.conflicts[int(idx_str)]
 
         loop = asyncio.get_running_loop()
-        schedule = await loop.run_in_executor(None, load_schedule, self.guild_id)
+        try:
+            schedule = await loop.run_in_executor(
+                None, functools.partial(load_schedule, self.guild_id, strict=True)
+            )
+        except ScheduleUnreadable:
+            await interaction.followup.send(
+                TRAIN_SCHEDULE_UNREADABLE.format(tab=_train_tab_name(self.guild_id)),
+                ephemeral=True,
+            )
+            return
         # The slot may have been taken since the alert posted.
         if date_iso in schedule:
             await interaction.followup.send(
@@ -514,8 +526,11 @@ class TrainCog(commands.Cog):
                     # way; that check has its own time gate.
                     if get_birthday_population_last_fired(guild.id) != today_iso:
                         try:
+                            # Strict: a failed read raises into the except
+                            # below, which leaves the day un-stamped for a
+                            # retry instead of saving over an unread tab (#716).
                             current_schedule = await asyncio.get_event_loop().run_in_executor(
-                                None, load_schedule, guild.id
+                                None, functools.partial(load_schedule, guild.id, strict=True)
                             )
                             # Snapshot for change detection — check_and_add_birthdays
                             # mutates `current_schedule` in place and returns the

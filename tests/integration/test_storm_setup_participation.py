@@ -218,7 +218,7 @@ DISABLED = {
 }
 
 ENABLE_PROMPT = (
-    "**Step 7 of 9: Participation Tracking**\n"
+    "**Step 6 of 8: Participation Tracking**\n"
     "Do you want to track Desert Storm participation? Leadership clicks "
     "**📊 Fill out participation questions** on `/desertstorm` "
     "after each event to log who showed up, who sat out, etc.\n"
@@ -226,7 +226,7 @@ ENABLE_PROMPT = (
     "your alliance runs the event."
 )
 ALIAS_PROMPT = (
-    "**Step 7.4: Roster Source: Alias Column?**\n"
+    "**Step 6.4: Roster Source: Alias Column?**\n"
     "If you have other names or nicknames that you call your members in these "
     "mails, this helps resolve to their full name in your sheet automatically. "
     "Do you have an alias column?"
@@ -295,24 +295,24 @@ class TestStepFresh:
         s.assert_order(
             ENABLE_PROMPT,
             ALIAS_PROMPT,
-            "**Step 7.6: Use any preset questions?**",
-            "**Step 7.7: Participation Questions**",
+            "**Step 6.6: Use any preset questions?**",
+            "**Step 6.7: Participation Questions**",
         )
-        assert rec.prompt(0).startswith("**Step 7.1: Participation Sheet Tab**\n")
+        assert rec.prompt(0).startswith("**Step 6.1: Participation Sheet Tab**\n")
         assert "Which tab should the bot write Desert Storm participation rows to?" in rec.prompt(0)
         assert rec.kw(0)["default"] == "DS Participation Log" and rec.kw(0)["current"] == ""
         assert rec.kw(0)["modal_title"] == "Participation Tab"
-        assert rec.prompt(1).startswith("**Step 7.2: Roster Source: Sheet Tab**\n")
+        assert rec.prompt(1).startswith("**Step 6.2: Roster Source: Sheet Tab**\n")
         assert "`/setup` → 📋 Survey or `/setup` → 🎂 Birthdays" in rec.prompt(1)
         # The seeded guild has a survey config, so its squad-powers tab is suggested.
         assert rec.kw(1)["default"] == "Squad Powers" and rec.kw(1)["current"] == "Squad Powers"
         assert rec.prompt(2) == (
-            "**Step 7.3: Roster Source: Name Column**\n"
+            "**Step 6.3: Roster Source: Name Column**\n"
             "Which column letter has the member name? (e.g. `A`, `B`, `E`)"
         )
         # A pristine row stores name column 0, which reads back as "A".
         assert rec.kw(2)["default"] == "A" and rec.kw(2)["current"] == "A"
-        assert rec.prompt(3).startswith("**Step 7.5: Roster Source: First Data Row**\n")
+        assert rec.prompt(3).startswith("**Step 6.5: Roster Source: First Data Row**\n")
         # A pristine row stores start row 2, which reads back as current "2".
         assert rec.kw(3)["default"] == "2" and rec.kw(3)["current"] == "2"
         assert rec.kw(3)["modal_label"] == "Row number"
@@ -463,9 +463,9 @@ class TestStepBuilder:
         _, s, _ = await _drive_step(
             [("selected", True), ("selected", False), ("action", "skip"), ("action", "done")]
         )
-        prompt = s.sent[s.index_of("Step 7.7")]
+        prompt = s.sent[s.index_of("Step 6.7")]
         assert prompt == (
-            "**Step 7.7: Participation Questions**\n"
+            "**Step 6.7: Participation Questions**\n"
             "Each question becomes a column on your sheet and a step in "
             "the **📊 Fill out participation questions** flow on "
             "`/desertstorm`.\n"
@@ -482,7 +482,7 @@ class TestStepBuilder:
             [("value", True), ("value", True), ("action", "skip"), ("action", "done")],
             is_premium=True,
         )
-        prompt = s.sent[s.index_of("Step 7.7")]
+        prompt = s.sent[s.index_of("Step 6.7")]
         assert "\n💎 *Premium: unlimited questions and three extra question types.*\n\n" in prompt
         assert prompt.endswith("**1. Vote Count**: _🔢 Numeric: number with optional min/max_")
         view = s.views[3]
@@ -507,8 +507,8 @@ class TestStepBuilder:
             ]
         )
         assert result["questions"] == []
-        assert sum("Step 7.7" in t for t in s.sent) == 2
-        assert s.sent[s.index_of("Step 7.7") + 1] == "🗑️ Removed **Vote Count**."
+        assert sum("Step 6.7" in t for t in s.sent) == 2
+        assert s.sent[s.index_of("Step 6.7") + 1] == "🗑️ Removed **Vote Count**."
 
     @pytest.mark.asyncio
     async def test_add_at_the_free_cap_shows_the_limit_embed(self, seeded_db):
@@ -547,8 +547,8 @@ class TestStepBuilder:
         assert result["questions"] == [
             {"key": "vote_count", "label": "Vote Count", "type": "numeric"}
         ]
-        s.assert_order("Step 7.7", "**Question: Label**", "✅ Added **Vote Count** (1 so far).")
-        assert sum("Step 7.7" in t for t in s.sent) == 2
+        s.assert_order("Step 6.7", "**Question: Label**", "✅ Added **Vote Count** (1 so far).")
+        assert sum("Step 6.7" in t for t in s.sent) == 2
 
     @pytest.mark.asyncio
     async def test_edit_replaces_in_place(self, seeded_db):
@@ -589,7 +589,7 @@ class TestStepBuilder:
         assert result["questions"] == [
             {"key": "showed_up", "label": "Did this member show up?", "type": "roster_multi_select"}
         ]
-        assert "**1. Did this member show up?**" in s.sent[s.index_of("Step 7.7")]
+        assert "**1. Did this member show up?**" in s.sent[s.index_of("Step 6.7")]
 
 
 class TestStepExits:
@@ -658,7 +658,7 @@ class TestPresetPicker:
             "\n💎 *Presets marked with 💎 are Premium-only. Run "
             "`/upgrade` to unlock 3 additional preset(s).*"
         )
-        assert s.sent[0].startswith("**Step 7.6: Use any preset questions?**\n")
+        assert s.sent[0].startswith("**Step 6.6: Use any preset questions?**\n")
 
     @pytest.mark.asyncio
     async def test_premium_shows_them_plain(self):

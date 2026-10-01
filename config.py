@@ -4991,7 +4991,6 @@ _TAB_OWNERS = [
 
 # Storm rows are keyed by (guild, event_type), so their labels name the event.
 _STORM_TAB_OWNERS = [
-    ("tab_name", "storm_tab_name", "{label} assignments"),
     ("participation_tab_name", "participation_tab_name", "{label} participation log"),
     ("participation_roster_tab", "participation_roster_tab", "{label} participation roster"),
 ]

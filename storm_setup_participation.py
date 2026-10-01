@@ -540,7 +540,7 @@ async def run_preset_picker_step(
     prem_count_visible = sum(1 for p in available if _is_premium_only(p))
     try:
         action = await w.ask(
-            f"**Step 7.6: Use any preset questions?**\n"
+            f"**Step 6.6: Use any preset questions?**\n"
             f"Pre-configured templates for the common participation "
             f"questions. Pick any you want and they'll land in your "
             f"question list ready to use. You can still customize them "
@@ -847,7 +847,7 @@ async def _ask_enable(w: _Walk, cur_part: dict, *, label: str, parent_cmd: str) 
     )
     return await _ask_yes_no(
         w,
-        f"**Step 7 of 9: Participation Tracking**\n"
+        f"**Step 6 of 8: Participation Tracking**\n"
         f"Do you want to track {label} participation? Leadership clicks "
         f"**📊 Fill out participation questions** on `/{parent_cmd}` "
         f"after each event to log who showed up, who sat out, etc.\n"
@@ -860,7 +860,7 @@ async def _ask_enable(w: _Walk, cur_part: dict, *, label: str, parent_cmd: str) 
 async def _ask_tab(w: _Walk, cur_part: dict, *, guild_id: int, event_type: str, label: str) -> str:
     hardcoded_tab = "DS Participation Log" if event_type == "DS" else "CS Participation Log"
     tab_name = await w.keep_or_change(
-        f"**Step 7.1: Participation Sheet Tab**\n"
+        f"**Step 6.1: Participation Sheet Tab**\n"
         f"Which tab should the bot write {label} participation rows to?\n"
         f"ℹ️ *The bot will create this tab automatically if it doesn't exist "
         f"and will manage the column structure based on the questions you define.*",
@@ -919,7 +919,7 @@ async def _ask_roster_source(
         or ""
     )
     roster_tab = await w.keep_or_change(
-        f"**Step 7.2: Roster Source: Sheet Tab**\n"
+        f"**Step 6.2: Roster Source: Sheet Tab**\n"
         f"Which tab in your sheet has the list of members? The bot reads "
         f"member names from here when you use a `Roster names` question.\n"
         f"*Tip: this is often the same tab you use for `/setup` → {HUB_BTN_SURVEY} or "
@@ -932,7 +932,7 @@ async def _ask_roster_source(
 
     roster_name_col = await _ask_column(
         w,
-        "**Step 7.3: Roster Source: Name Column**\n"
+        "**Step 6.3: Roster Source: Name Column**\n"
         "Which column letter has the member name? (e.g. `A`, `B`, `E`)",
         default="A",
         current=_letter_or_blank(cur_part.get("roster_name_col")),
@@ -951,7 +951,7 @@ async def _ask_roster_source(
     alias_answered = previously_saved and isinstance(saved_alias_idx, int)
     alias_selected = await _ask_yes_no(
         w,
-        "**Step 7.4: Roster Source: Alias Column?**\n"
+        "**Step 6.4: Roster Source: Alias Column?**\n"
         "If you have other names or nicknames that you call your members in these "
         "mails, this helps resolve to their full name in your sheet automatically. "
         "Do you have an alias column?",
@@ -981,7 +981,7 @@ async def _ask_roster_source(
         )
 
     raw_start = await w.keep_or_change(
-        "**Step 7.5: Roster Source: First Data Row**\n"
+        "**Step 6.5: Roster Source: First Data Row**\n"
         "In your existing roster tab above, which row does the member data start on? "
         "Usually `2` if your sheet has a header row in row 1.",
         default="2",
@@ -1010,7 +1010,7 @@ def _summarize(questions: list[dict]) -> str:
 async def _run_builder_loop(
     w: _Walk, questions: list[dict], *, parent_cmd: str, cap: int | None
 ) -> None:
-    """Step 7.7: add, edit and remove questions until Done. Edits the
+    """Step 6.7: add, edit and remove questions until Done. Edits the
     list in place."""
     import premium
 
@@ -1022,7 +1022,7 @@ async def _run_builder_loop(
     while True:
         view = _BuilderView(questions)
         await w.channel.send(
-            f"**Step 7.7: Participation Questions**\n"
+            f"**Step 6.7: Participation Questions**\n"
             f"Each question becomes a column on your sheet and a step in "
             f"the **📊 Fill out participation questions** flow on "
             f"`/{parent_cmd}`.\n"

@@ -1205,7 +1205,7 @@ async def _ask_opt_in(w: _Wizard, current_structured: dict) -> bool:
     from config import has_storm_config
 
     await w.channel.send(
-        f"**Step 8 of 9: Structured Roster Flow (💎 Premium)**\n"
+        f"**Step 7 of 8: Structured Roster Flow (💎 Premium)**\n"
         f"The structured flow auto-posts a Discord sign-up poll, captures "
         f"votes per member, and gives leadership a roster builder that "
         f"filters members by power for each zone. Replaces the text-template "

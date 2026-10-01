@@ -225,6 +225,12 @@ def _train():
     return config.get_train_config(G)
 
 
+def _guild():
+    import config
+
+    return config.get_config(G)
+
+
 def _save_train(**over):
     import config
 
@@ -241,6 +247,8 @@ def _save_train(**over):
     )
     kw.update(over)
     config.save_train_config(G, **kw)
+    # The tab the bot reads, which the wizard keeps equal to the above (#717).
+    config.update_config_field(G, "tab_train_schedule", kw["tab_name"])
 
 
 # ── The wizard ───────────────────────────────────────────────────────────────
@@ -278,6 +286,8 @@ class TestWizardFresh:
         assert rec.kw(0)["timeout_cmd"] == "setup → 🚂 Train"
         cfg = _train()
         assert cfg["tab_name"] == "Trains" and cfg["blurbs_enabled"] == 0
+        # Saved where every train read and write looks (#717).
+        assert _guild().tab_train_schedule == "Trains"
         assert cfg["reminders_enabled"] == 0 and cfg["rotation_enabled"] == 0
         assert cfg["reminder_time"] == "22:00" and cfg["dm_message"] == ""
         embed = s.final_embed
@@ -417,6 +427,22 @@ class TestWizardFresh:
         tone_view = s.view_named("ToneDefaultView")
         assert tone_view.children[0].label == "Keep current: Funny"
         assert _train()["themes"] == ["Heroic"]  # blank reply keeps the current list
+
+    @pytest.mark.asyncio
+    async def test_the_tab_step_shows_the_tab_the_bot_uses(self, seeded_db):
+        """A train config saved before #717 can hold a tab name nothing
+        read. Keep current offers the tab the bot really uses instead."""
+        import config
+
+        _save_train()
+        with config._get_conn() as conn:
+            conn.execute(
+                "UPDATE guild_train_config SET tab_name = ? WHERE guild_id = ?", ("Ignored Tab", G)
+            )
+            conn.commit()
+        _, rec, _ = await _drive([("proceed", True)] + MINIMAL, keep=["My Tab"])
+        assert rec.kw(0)["current"] == "My Tab"
+        assert _guild().tab_train_schedule == "My Tab"
 
     @pytest.mark.asyncio
     async def test_turning_blurbs_and_reminders_off_keeps_saved_values(self, seeded_db):

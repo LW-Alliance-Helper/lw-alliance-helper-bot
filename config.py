@@ -4972,13 +4972,14 @@ def save_extra_survey(
 # Every per-guild configurable sheet tab, as
 # (table, tab column, config field, what the alliance calls the feature).
 # `field` is what a wizard passes as `exclude_field` so a step doesn't
-# report a collision with the value it's currently editing.
+# report a collision with the value it's currently editing. The train
+# schedule is listed once, by the field the bot reads: the train config's
+# own `tab_name` only mirrors it (#717).
 _TAB_OWNERS = [
     ("guild_configs", "tab_train_schedule", "tab_train_schedule", "your train schedule"),
     ("guild_configs", "tab_ds_assignments", "tab_ds_assignments", "your Desert Storm assignments"),
     ("guild_configs", "tab_sitouts", "tab_sitouts", "your storm sit-outs"),
     ("guild_configs", "tab_member_default", "tab_member_default", "your default member tab"),
-    ("guild_train_config", "tab_name", "train_tab_name", "your train schedule"),
     ("guild_buddy_config", "buddy_tab", "buddy_tab", "your Buddy System list"),
     ("guild_buddy_config", "preset_tab", "preset_tab", "your saved buddy presets"),
     ("guild_growth_config", "tab_growth", "tab_growth", "your Growth Tracking snapshots"),

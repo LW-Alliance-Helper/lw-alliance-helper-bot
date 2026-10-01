@@ -42,8 +42,8 @@ BTN_WORKLOAD = "⚖️ Workload"
 BTN_MY_DUTIES = "👤 My duties"
 BTN_REMINDERS = "🔔 Reminders"
 BTN_CATEGORIES = "🏷️ Categories"
-#: The sharing row (#706, #707). Kevin's words, 2026-09-30; the glyphs are
-#: provisional until copy sign-off.
+#: The sharing row (#706, #707). Kevin's words and capital C, 2026-09-30; the
+#: glyphs and every string below for these posts were signed off the same day.
 BTN_SHARE_LEADERSHIP = "📋 Share to leadership channel"
 BTN_SHARE_MEMBERS = "📣 Share curated list with members"
 BTN_POST_CONTACT = "⚙️ Post Contact buttons"

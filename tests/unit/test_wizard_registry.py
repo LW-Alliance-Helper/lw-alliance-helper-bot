@@ -126,6 +126,43 @@ class TestWaitViewOrCancel:
         assert view.cancelled is False
 
 
+# ── A real timeout, told apart from a stop (#679) ────────────────────────────
+
+
+class TestPromptSaidTimeout:
+    @pytest.mark.parametrize("with_cancel_event", [True, False])
+    @pytest.mark.asyncio
+    async def test_a_timeout_on_a_hinted_view_is_said_on_the_prompt(self, with_cancel_event):
+        view = wizard_registry.ExpiringView(timeout=5, timeout_hint="`/setup` → **X**")
+        # discord.py starts the timer only once a view is sent; fire it directly.
+        asyncio.get_running_loop().call_later(0.01, view._dispatch_timeout)
+        with patch("wizard_registry.expire_view_message", new=AsyncMock()):
+            await wait_view_or_cancel(view, asyncio.Event() if with_cancel_event else None)
+        assert view.timed_out is True
+        assert wizard_registry.prompt_said_timeout(view) is True
+
+    @pytest.mark.asyncio
+    async def test_a_stop_is_not_a_timeout(self):
+        """A modal dismissed inside a view stops it; the wizard still owes
+        its own line then."""
+        view = wizard_registry.ExpiringView(timeout=5, timeout_hint="`/setup` → **X**")
+        asyncio.get_running_loop().call_later(0.01, view.stop)
+        await wait_view_or_cancel(view, asyncio.Event())
+        assert view.timed_out is False
+        assert wizard_registry.prompt_said_timeout(view) is False
+
+    @pytest.mark.asyncio
+    async def test_a_view_with_no_hint_says_nothing_on_the_prompt(self):
+        view = wizard_registry.ExpiringView(timeout=5)
+        asyncio.get_running_loop().call_later(0.01, view._dispatch_timeout)
+        await wait_view_or_cancel(view, None)
+        assert view.timed_out is True
+        assert wizard_registry.prompt_said_timeout(view) is False
+
+    def test_a_view_never_waited_on_has_not_timed_out(self):
+        assert wizard_registry.prompt_said_timeout(MagicMock(spec=[])) is False
+
+
 # ── End-to-end with cancel_user ───────────────────────────────────────────────
 
 

@@ -360,7 +360,7 @@ async def _ask_signup_schedule(
             current=saved_12h,
             modal_title="Sign-Up Time",
             modal_label="e.g. 2:00pm",
-            timeout_cmd=cmd_name,
+            timeout_msg=GENERIC_CMD_TIMEOUT.format(cmd=cmd_name),
             cancel_event=cancel_event,
         )
         if time_picked is None:

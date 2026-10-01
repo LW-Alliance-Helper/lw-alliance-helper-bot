@@ -283,7 +283,7 @@ class TestWizardFresh:
             "⚠️ *Make sure this tab exists in your sheet before continuing.*"
         )
         assert rec.kw(0)["default"] == "Train Schedule" and rec.kw(0)["current"] == "Train Schedule"
-        assert rec.kw(0)["timeout_cmd"] == "setup → 🚂 Train"
+        assert rec.kw(0)["timeout_msg"] == TIMEOUT
         cfg = _train()
         assert cfg["tab_name"] == "Trains" and cfg["blurbs_enabled"] == 0
         # Saved where every train read and write looks (#717).

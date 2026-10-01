@@ -68,3 +68,83 @@ def test_wizard_steps_imports_no_feature_module():
 
 def test_timezone_labels_cover_every_option():
     assert set(wizard_steps.TIMEZONE_LABELS) == {tz for tz, _ in wizard_steps.TIMEZONE_OPTIONS}
+
+
+# ── Owned, expiring yes/no prompts (#679) ────────────────────────────────────
+
+from unittest.mock import AsyncMock, MagicMock, patch  # noqa: E402
+
+from messages import DENY_NOT_OWNER  # noqa: E402
+
+HINT = "`/setup` → **🎂 Birthdays**"
+OWNER = 111
+
+
+def _yes_no():
+    return wizard_steps.YesNoView(owner_id=OWNER, timeout_hint=HINT)
+
+
+def _gate():
+    return wizard_steps._KeepOrFlipYesNoGate(current_value=True, owner_id=OWNER, timeout_hint=HINT)
+
+
+def _inter(user_id):
+    inter = MagicMock()
+    inter.user.id = user_id
+    inter.response.send_message = AsyncMock()
+    return inter
+
+
+@pytest.mark.parametrize("make", [_yes_no, _gate], ids=["YesNoView", "_KeepOrFlipYesNoGate"])
+async def test_only_the_officer_running_the_wizard_may_answer(make):
+    view = make()
+    stranger = _inter(222)
+    assert await view.interaction_check(stranger) is False
+    stranger.response.send_message.assert_awaited_once_with(DENY_NOT_OWNER, ephemeral=True)
+    assert await view.interaction_check(_inter(OWNER)) is True
+
+
+@pytest.mark.parametrize("make", [_yes_no, _gate], ids=["YesNoView", "_KeepOrFlipYesNoGate"])
+async def test_a_timed_out_prompt_names_the_route_back(make):
+    view = make()
+    view.message = MagicMock()
+    with patch("wizard_registry.expire_view_message", new=AsyncMock()) as expire:
+        await view.on_timeout()
+    expire.assert_awaited_once_with(view.message, command_hint=HINT)
+
+
+def test_setup_route_is_the_route_hint_shape():
+    assert wizard_steps.setup_route("🎂 Birthdays") == HINT
+
+
+@pytest.mark.parametrize(
+    "cmd_name, route",
+    [
+        ("setup → ⚔️ Desert Storm", "`/setup` → **⚔️ Desert Storm**"),
+        ("setup → 🛡️ Canyon Storm", "`/setup` → **🛡️ Canyon Storm**"),
+        ("desertstorm", "`/desertstorm`"),
+    ],
+)
+def test_route_from_cmd_name(cmd_name, route):
+    assert wizard_steps.route_from_cmd_name(cmd_name) == route
+
+
+async def test_keep_or_change_times_out_in_the_wizards_own_words():
+    channel = MagicMock()
+    channel.send = AsyncMock()
+    with patch("wizard_steps.wait_view_or_cancel", new=AsyncMock()) as wait:
+
+        async def _timeout(view, _ev):
+            view.cancelled = False
+
+        wait.side_effect = _timeout
+        got = await wizard_steps.ask_keep_or_change(
+            channel,
+            "Prompt",
+            default="A",
+            modal_title="T",
+            modal_label="L",
+            timeout_msg="⏰ Timed out. Run `/setup` → 🎂 Birthdays to start again.",
+        )
+    assert got is None
+    channel.send.assert_awaited_with("⏰ Timed out. Run `/setup` → 🎂 Birthdays to start again.")

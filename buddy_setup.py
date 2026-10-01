@@ -37,6 +37,7 @@ import wizard_registry
 import wizard_steps
 from messages import PREV_CHANNEL_GONE
 from wizard_registry import wait_view_or_cancel
+from setup_hub import HUB_BTN_BUDDY
 from wizard_steps import WIZARD_STEP_TIMEOUT
 
 
@@ -54,6 +55,7 @@ class _Abort(Exception):
 
 TIMEOUT_MSG = "⏰ Setup timed out. Run `/setup` → 🤝 Buddy System to start again."
 NAV = "setup → 🤝 Buddy System"
+ROUTE = wizard_steps.setup_route(HUB_BTN_BUDDY)
 DEFAULT_REL_COL = "D"
 
 
@@ -77,22 +79,27 @@ class _Wizard:
     async def ask(self, text: str, view, attr: str):
         """Post `text` with `view`, wait, and return `view.<attr>`; a timeout
         (the attribute still `None`) posts the route back and raises."""
-        await self.channel.send(text, view=view)
+        view.message = await self.channel.send(text, view=view)
         await self.wait(view)
         value = getattr(view, attr)
         if value is None:
-            await self.channel.send(TIMEOUT_MSG)
+            if not wizard_registry.prompt_said_timeout(view):
+                await self.channel.send(TIMEOUT_MSG)
             raise _Abort
         return value
 
     async def ask_yes_no(self, text: str) -> bool:
-        return bool(await self.ask(text, wizard_steps.YesNoView(), "selected"))
+        return bool(
+            await self.ask(
+                text, wizard_steps.YesNoView(owner_id=self.user.id, timeout_hint=ROUTE), "selected"
+            )
+        )
 
     async def ask_yes_no_lenient(self, text: str) -> bool:
         """The opt-out and roster questions never had a timeout branch: an
         unanswered view reads as No and the walk carries on."""
-        view = wizard_steps.YesNoView()
-        await self.channel.send(text, view=view)
+        view = wizard_steps.YesNoView(owner_id=self.user.id)
+        view.message = await self.channel.send(text, view=view)
         await self.wait(view)
         return bool(view.selected)
 
@@ -100,7 +107,7 @@ class _Wizard:
         """One `ask_keep_or_change` question. The helper posts its own cancel
         and timeout notice; an abandoned one just raises."""
         picked = await wizard_steps.ask_keep_or_change(
-            self.channel, prompt, timeout_cmd=NAV, cancel_event=self.cancel_event, **kw
+            self.channel, prompt, timeout_msg=TIMEOUT_MSG, cancel_event=self.cancel_event, **kw
         )
         if picked is None:
             raise _Abort

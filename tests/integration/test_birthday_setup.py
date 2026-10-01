@@ -12,6 +12,7 @@ the move.
 """
 
 import importlib
+import asyncio
 from unittest.mock import patch, MagicMock, AsyncMock
 import sys, os
 
@@ -90,6 +91,11 @@ class Script:
         answer = self.answers.pop(0)
         if answer == "cancel":
             self.cancel_event.set()
+            return MagicMock(id=1)
+        if answer == "expire":
+            # The view's own timeout, as discord.py fires it: `wait()`
+            # returns True and `on_timeout` runs (#679).
+            view._dispatch_timeout()
             return MagicMock(id=1)
         if answer != "timeout":
             attrs = answer if isinstance(answer, dict) else dict([answer])
@@ -286,7 +292,7 @@ class TestFresh:
             current="Birthdays",
             modal_title="Sheet Tab Name",
             modal_label="Tab name",
-            timeout_cmd="setup_birthdays",
+            timeout_msg=TIMEOUT,
             cancel_event=s.cancel_event,
         )
         assert rec.prompt(1) == (
@@ -680,6 +686,19 @@ class TestExits:
     async def test_timeout_posts_the_route_back(self, seeded_db, stop_at):
         s, _, _ = await _drive(MINIMAL[:stop_at] + ["timeout"])
         assert s.sent[-1] == TIMEOUT and not _has()
+
+    @pytest.mark.parametrize("stop_at", [0, 1, 2])
+    @pytest.mark.asyncio
+    async def test_a_prompt_that_says_it_timed_out_gets_no_second_line(self, seeded_db, stop_at):
+        """The prompt carries the notice itself, so the wizard posts no
+        follow-up line (#679)."""
+        with patch("wizard_registry.expire_view_message", new=AsyncMock()) as expire:
+            s, _, _ = await _drive(MINIMAL[:stop_at] + ["expire"])
+            await asyncio.sleep(0)
+        s.assert_never(TIMEOUT)
+        assert not _has()
+        expire.assert_awaited_once()
+        assert expire.await_args.kwargs["command_hint"] == "`/setup` → **🎂 Birthdays**"
 
     @pytest.mark.parametrize("stop_at", [0, 1, 2])
     @pytest.mark.asyncio

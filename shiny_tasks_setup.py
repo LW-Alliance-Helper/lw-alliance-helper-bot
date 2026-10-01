@@ -56,6 +56,7 @@ class _Abort(Exception):
 
 TIMEOUT_MSG = WIZARD_TIMEOUT.format(wizard=HUB_BTN_SHINY)
 RECOVERY = f"`/setup` → {HUB_BTN_SHINY}"
+ROUTE = wizard_steps.setup_route(HUB_BTN_SHINY)
 DEFAULT_TZ = "America/New_York"
 
 
@@ -79,11 +80,12 @@ class _Wizard:
     async def ask(self, text: str, view, attr: str):
         """Post `text` with `view`, wait, and return `view.<attr>`; a timeout
         (the attribute still `None`) posts the route back and raises."""
-        await self.channel.send(text, view=view)
+        view.message = await self.channel.send(text, view=view)
         await self.wait(view)
         value = getattr(view, attr)
         if value is None:
-            await self.channel.send(TIMEOUT_MSG)
+            if not wizard_registry.prompt_said_timeout(view):
+                await self.channel.send(TIMEOUT_MSG)
             raise _Abort
         return value
 
@@ -93,7 +95,7 @@ class _Wizard:
         picked = await wizard_steps.ask_keep_or_change(
             self.channel,
             prompt,
-            timeout_cmd="setup_shiny_tasks",
+            timeout_msg=TIMEOUT_MSG,
             cancel_event=self.cancel_event,
             **kw,
         )
@@ -245,7 +247,7 @@ async def _ask_enable(w: _Wizard, s: _Saved) -> None:
     as "current"; then the clear button, and the wizard ends."""
     enabled = await w.ask(
         "**Step 1 of 6 — Enable daily shiny tasks announcement?**",
-        wizard_steps.YesNoView(),
+        wizard_steps.YesNoView(owner_id=w.user.id, timeout_hint=ROUTE),
         "selected",
     )
     if enabled:
@@ -366,8 +368,8 @@ async def _ask_message(w: _Wizard, s: _Saved, a: _Answers) -> None:
 
 
 async def _confirm(w: _Wizard, s: _Saved, a: _Answers) -> None:
-    """Step 6: the final review. A declined or timed-out review both post
-    the cancel line (`not confirmed` covers None)."""
+    """Step 6: the final review. Cancel posts the cancel line; a timeout
+    posts the timeout line, like every other step (#679)."""
     from defaults import DEFAULT_SHINY_TASKS_MESSAGE
 
     embed = discord.Embed(
@@ -389,6 +391,9 @@ async def _confirm(w: _Wizard, s: _Saved, a: _Answers) -> None:
     view = wizard_steps.ConfirmView()
     await w.channel.send(embed=embed, view=view)
     await w.wait(view)
+    if view.confirmed is None:
+        await w.channel.send(TIMEOUT_MSG)
+        raise _Abort
     if not view.confirmed:
         await w.channel.send(f"{CANCEL_PLAIN} Run {RECOVERY} to start again.")
         raise _Abort

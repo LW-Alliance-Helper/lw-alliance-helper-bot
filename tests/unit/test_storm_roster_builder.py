@@ -4625,6 +4625,30 @@ class TestRostersTabHeaderMigration:
     paired data lands under an unlabeled column and `storm_history`
     can't read it back. Header migration rewrites the row in place."""
 
+    def test_an_empty_tab_gets_its_header_before_the_rows(self, fake_env):
+        """Attendance or history can create the tab empty before the first
+        roster is posted; the first post seeds the header (#668 audit)."""
+        fake, gid = fake_env
+        empty = fake.add_worksheet("DS Rosters")
+        empty._rows = []
+        members = {
+            "1001": {
+                "key": "1001",
+                "name": "Alpha",
+                "discord_id": "1001",
+                "power": 412_000_000,
+                "not_on_discord": False,
+            },
+        }
+        session = _make_session(team="A", members=members)
+        session.guild_id = gid
+        session.event_date = "2026-05-18"
+        session.assignments["Power Tower"].append("1001")
+        assert srb._write_rosters_tab(session) == []
+        assert empty._rows[0] == srb._ROSTERS_HEADER
+        member_idx = srb._ROSTERS_HEADER.index("Member")
+        assert [r[member_idx] for r in empty._rows[1:]] == ["Alpha"]
+
     def test_old_header_rewritten_in_place(self, fake_env):
         fake, gid = fake_env
         # Seed an old-shape rosters_tab — the pre-#132 9-column header

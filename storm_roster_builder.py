@@ -4795,12 +4795,25 @@ def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
         # place before appending new data. Use `get_all_values()[0]`
         # rather than `row_values(1)` so the fake worksheet in tests
         # doesn't need a new method.
+        header_read = True
         try:
             all_values = ws.get_all_values()
             existing = all_values[0] if all_values else []
         except Exception as e:
+            header_read = False
             existing = []
             errors.append(f"rosters tab header read failed: {e}")
+        # A read-only path (attendance, history, the participation date
+        # picker) can create this tab empty, with no header, before the
+        # first roster is posted. `get_or_create_worksheet` then hands it
+        # back as existing, so the header above was never seeded, and the
+        # rows appended below landed under no header where no reader could
+        # find them. Seed it now (#668 audit).
+        if header_read and not any(cell for row in all_values for cell in row):
+            try:
+                ws.update("A1", [list(_ROSTERS_HEADER)], value_input_option="RAW")
+            except Exception as e:
+                errors.append(f"rosters tab header seed failed: {e}")
         # Three header migrations to handle:
         # - "Paired With" column (added in #132)
         # - "Phase" column (added in #152) — inserted at position 2

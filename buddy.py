@@ -967,8 +967,10 @@ def _prof_cell(id_col_letter, rownum, discord_id, name, cols, profession_tab, st
             f"=IFERROR(INDEX('{tab}'!${prof_letter}:${prof_letter}, "
             f"MATCH({ref}, '{tab}'!${id_letter}:${id_letter}, 0)), \"\")"
         )
-    # No Discord ID → match by name against the Username column.
-    name_col_letter = _col_letter(_col_letter_to_index(id_col_letter) + 2)
+    # No Discord ID → match by name against the Username column. The name
+    # sits one column right of the ID; both helpers count from 1, so +1
+    # (it was +2, which pointed the formula at its own cell, #718).
+    name_col_letter = _col_letter(_col_letter_to_index(id_col_letter) + 1)
     ref = f"{name_col_letter}{rownum}"
     return (
         f"=IFERROR(INDEX('{tab}'!${prof_letter}:${prof_letter}, "

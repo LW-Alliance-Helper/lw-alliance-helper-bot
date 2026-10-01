@@ -193,6 +193,20 @@ def test_profession_cells_are_formulas_not_static(sheets):
     assert "MATCH(D2" in row[5]
 
 
+def test_profession_formula_matches_by_name_when_there_is_no_id(sheets):
+    """No Discord ID: the formula looks up the Name cell beside it, never
+    its own Profession cell (#718)."""
+    sheets["Squad Powers"] = FakeWS([["Username", "Discord ID", "1st Squad Power", "Profession"]])
+    members = [W("Walt", ""), E("Eve", "")]
+    result = assign_buddies(members, [])
+    buddy.save_pairs(GID, "Buddies", result, "Squad Powers", "Profession")
+
+    row = sheets["Buddies"].rows[1]
+    assert row[1] == "Walt" and row[4] == "Eve"
+    assert "MATCH(B2, 'Squad Powers'!$A:$A, 0)" in row[2]
+    assert "MATCH(E2, 'Squad Powers'!$A:$A, 0)" in row[5]
+
+
 def test_profession_static_fallback_when_squad_powers_missing(sheets):
     # No Squad Powers tab seeded → columns unresolvable → static values.
     members = [W("Walt", "1"), E("Eve", "3")]

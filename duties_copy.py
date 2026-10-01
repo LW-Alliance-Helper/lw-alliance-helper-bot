@@ -41,8 +41,12 @@ BTN_DELETE = "🗑️ Delete a duty"
 BTN_WORKLOAD = "⚖️ Workload"
 BTN_MY_DUTIES = "👤 My duties"
 BTN_REMINDERS = "🔔 Reminders"
-BTN_CONTACT = "⚙️ Contact settings"
 BTN_CATEGORIES = "🏷️ Categories"
+#: The sharing row (#706, #707). Kevin's words, 2026-09-30; the glyphs are
+#: provisional until copy sign-off.
+BTN_SHARE_LEADERSHIP = "📋 Share to leadership channel"
+BTN_SHARE_MEMBERS = "📣 Share curated list with members"
+BTN_POST_CONTACT = "⚙️ Post Contact buttons"
 
 #: The route back from anything opened off the hub.
 HUB_ROUTE = f"`{DUTIES_CMD}`"
@@ -120,7 +124,7 @@ DUTY_NO_CATEGORIES = (
 )
 FIELD_DESCRIPTION = "Description"
 FIELD_DESCRIPTION_PLACEHOLDER = (
-    "What it covers. Members see this on the contact buttons if you turn them on."
+    "What it covers. Members see this on the contact buttons and on lists you share with them."
 )
 
 EDITOR_TITLE = "✏️ {name}"
@@ -308,7 +312,7 @@ REMINDER_FALLBACK = "🔔 I couldn't DM {who} this **{duty}** reminder, so here 
 
 # ── Contact settings ─────────────────────────────────────────────────────────
 
-CONTACT_TITLE = BTN_CONTACT
+CONTACT_TITLE = BTN_POST_CONTACT
 CONTACT_INTRO = (
     "Members click a duty's button to open a private thread with the people "
     "assigned to it. Turn contact on for a duty from **✏️ Edit a duty**."
@@ -328,9 +332,10 @@ BTN_POST_AGAIN = "📣 Post them again"
 CONTACT_SAVED = "✅ Saved the contact settings."
 CONTACT_PICK_CHANNEL_FIRST = "⚠️ Pick a channel for the contact buttons first."
 CONTACT_POSTED_ACK = "📣 Posted the contact buttons in {channel}."
-CONTACT_POST_FAILED = (
+POST_FAILED = (
     "⚠️ I couldn't post in {channel}. Check I can **View Channel** and **Send Messages** there."
 )
+CONTACT_POST_FAILED = POST_FAILED
 
 WARN_MANAGE_THREADS = (
     "⚠️ Anyone with **Manage Threads** in {channel} can read every thread in it, "
@@ -358,6 +363,62 @@ PANEL_INTRO = (
 PANEL_EMPTY = "ℹ️ There's nobody to contact here right now."
 PANEL_HELD_BY = "Handled by {who}"
 PANEL_BACKUP = "Backup: {who}"
+
+# ── Sharing the full list to the leadership channel (#706) ──────────────────
+
+ROSTER_TITLE = "📋 Leadership Duties"
+ROSTER_INTRO = (
+    "Every duty and who is assigned to it. This updates itself when a duty changes. "
+    f"Click **{BTN_MY_DUTIES}** to see yours."
+)
+ROSTER_EMPTY = "ℹ️ There are no duties right now."
+ROSTER_MORE = (
+    f"…and 1 more duty. See them all in `{DUTIES_CMD}`.",
+    f"…and {{n}} more duties. See them all in `{DUTIES_CMD}`.",
+)
+ROSTER_DENIED = "⛔ Only leadership can use this."
+ROSTER_PICK_CHANNEL = (
+    "ℹ️ Your leadership channel isn't set in `/setup`, so pick where to share the list."
+)
+ROSTER_CHANNEL_PH = "Channel to share the list in"
+BTN_SHARE_ROSTER = "📋 Share the list"
+ROSTER_SHARED_ACK = "📋 Shared the duty list in {channel}. It updates itself when a duty changes."
+
+# ── Sharing a curated list with members (#707) ──────────────────────────────
+
+SHARE_TITLE = BTN_SHARE_MEMBERS
+SHARE_INTRO = (
+    "Pick the duties members should see and who is in charge of each. There are no "
+    "contact buttons on this list. It updates itself when one of these duties changes, "
+    "and paused duties stay off it until they're resumed."
+)
+SHARE_PICKED_LINE = "**Duties picked:** {names}"
+SHARE_NONE_PICKED = "*none yet*"
+SHARE_SHOWS_LINE = "**Shows:** {who}"
+#: Kevin's words, 2026-09-30.
+SHOW_BOTH = "Primary & Backup"
+SHOW_PRIMARY = "Primary only"
+SHARE_CHANNEL_LINE = "**Shared in:** {channel}"
+SHARE_POSTED = "**List:** ✅ shared"
+SHARE_NOT_POSTED = "**List:** ❌ not shared yet"
+SHARE_PICK_PH = "Duties to share"
+SHARE_SHOW_PH = "Who to show"
+SHARE_CHANNEL_PH = "Channel to share it in"
+BTN_SHARE_LIST = "📣 Share the list"
+BTN_SHARE_AGAIN = "📣 Share it again"
+SHARE_NEEDS_DUTY = "⚠️ Pick at least one duty to share."
+SHARE_NEEDS_CHANNEL = "⚠️ Pick a channel to share the list in first."
+SHARE_ACK = (
+    "📣 Shared 1 duty with members in {channel}.",
+    "📣 Shared {n} duties with members in {channel}.",
+)
+SHARE_PAUSED_NOTE = "ℹ️ These are paused, so they join the list when they're resumed: {names}."
+
+# ── The curated list (member-facing) ────────────────────────────────────────
+
+SHARED_TITLE = "🪪 Who's in charge of what"
+SHARED_EMPTY = "ℹ️ There's nothing to show here right now."
+SHARED_MORE = ("…and 1 more duty.", "…and {n} more duties.")
 
 # ── Clicking a contact button (member-facing) ────────────────────────────────
 
@@ -390,6 +451,8 @@ CLOSE_DENIED = "⛔ Only leadership can close this."
 SUBJECT_REMINDER_CHANNEL = "a Leadership Duties reminder channel"
 SUBJECT_PANEL_CHANNEL = "the channel for your Leadership Duties contact buttons"
 SUBJECT_TICKET_CHANNEL = "the channel Leadership Duties threads open under"
+SUBJECT_ROSTER_CHANNEL = "the channel your Leadership Duties list is shared in"
+SUBJECT_SHARED_CHANNEL = "the channel your curated Leadership Duties list is shared in"
 SUBJECT_HOLDERS = "your Leadership Duties"
 HOLDER_LEFT_DETAIL = "**{name}** left the server. {their} {duties} now {have} an open position."
 
@@ -415,7 +478,16 @@ HELP_COMMANDS = (
         "in a thread, on a schedule you pick, from daily to monthly.",
     ),
     (
-        f"{DUTIES_CMD} → {BTN_CONTACT}",
+        f"{DUTIES_CMD} → {BTN_SHARE_LEADERSHIP}",
+        "Post every duty and who is assigned to it in your leadership channel. It updates "
+        f"itself, and **{BTN_MY_DUTIES}** under it shows each leader their own.",
+    ),
+    (
+        f"{DUTIES_CMD} → {BTN_SHARE_MEMBERS}",
+        "Pick which duties members see and who is in charge of each, with no contact buttons.",
+    ),
+    (
+        f"{DUTIES_CMD} → {BTN_POST_CONTACT}",
         "Post contact buttons for members. Each click opens a private thread with "
         "that member and the people assigned to the duty.",
     ),

@@ -63,6 +63,9 @@ class Duty:
     paused: bool = False
     #: Members get a button for this duty on the contact panel.
     contact_enabled: bool = False
+    #: Picked for the curated list leadership shares with members (#707).
+    #: Set from that share screen, never from the duty editor.
+    shared: bool = False
     sort_order: int = 0
     #: 0 = no category.
     category_id: int = 0

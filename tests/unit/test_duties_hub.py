@@ -78,7 +78,7 @@ def test_premium_hub_is_all_live():
 def test_empty_premium_hub_offers_only_what_can_change_something():
     buttons = _buttons(_hub(r.STATE_PREMIUM, []))
     live = {label for label, b in buttons.items() if not b.disabled}
-    assert live == {c.BTN_ADD, c.BTN_CONTACT, c.BTN_CATEGORIES}
+    assert live == {c.BTN_ADD, c.BTN_POST_CONTACT, c.BTN_CATEGORIES}
 
 
 def test_a_lapsed_hub_is_read_only_but_can_still_be_viewed():
@@ -609,3 +609,135 @@ def test_category_delete_confirm_says_where_duties_go():
         "This can't be undone."
     )
     assert r.category_delete_confirm("VS", 0) == "🗑️ **VS** will be deleted. This can't be undone."
+
+
+# ── The sharing row (#706, #707) ─────────────────────────────────────────────
+
+
+def test_the_sharing_row_is_the_third_and_contact_settings_is_gone():
+    view = _hub(r.STATE_PREMIUM, [d.Duty(id=1, guild_id=G, name="X")])
+    rows = {}
+    for item in view.children:
+        if isinstance(item, discord.ui.Button):
+            rows.setdefault(item.row, []).append(item.label)
+    assert rows[1] == [c.BTN_WORKLOAD, c.BTN_MY_DUTIES, c.BTN_REMINDERS, c.BTN_CATEGORIES]
+    assert rows[2] == [c.BTN_SHARE_LEADERSHIP, c.BTN_SHARE_MEMBERS, c.BTN_POST_CONTACT]
+
+
+def test_a_lapsed_hub_cannot_share():
+    buttons = _buttons(_hub(r.STATE_LAPSED, [d.Duty(id=1, guild_id=G, name="X")]))
+    assert buttons[f"💎 {c.BTN_SHARE_LEADERSHIP}"].disabled
+    assert buttons[f"💎 {c.BTN_SHARE_MEMBERS}"].disabled
+
+
+async def test_sharing_to_leadership_goes_straight_to_the_setup_channel(temp_db):
+    view = _hub(r.STATE_PREMIUM, [d.Duty(id=1, guild_id=G, name="X")])
+    inter = _inter()
+    with (
+        patch("config.get_config", return_value=MagicMock(leadership_channel_id=700)),
+        patch("duties_posts.post", AsyncMock(return_value=MagicMock())) as post,
+    ):
+        await _buttons(view)[c.BTN_SHARE_LEADERSHIP].callback(inter)
+    assert post.await_args.args[2:] == (h.duties_posts.ROSTER, 700)
+    inter.followup.send.assert_awaited_once_with(
+        c.ROSTER_SHARED_ACK.format(channel="<#700>"), ephemeral=True
+    )
+
+
+async def test_without_a_leadership_channel_it_asks_where(temp_db):
+    view = _hub(r.STATE_PREMIUM, [d.Duty(id=1, guild_id=G, name="X")])
+    inter = _inter()
+    with patch("config.get_config", return_value=MagicMock(leadership_channel_id=0)):
+        await _buttons(view)[c.BTN_SHARE_LEADERSHIP].callback(inter)
+    args, kwargs = inter.response.send_message.await_args
+    assert args == (c.ROSTER_PICK_CHANNEL,)
+    picker = kwargs["view"]
+    assert isinstance(picker, h.RosterChannelView)
+    assert _buttons(picker)[c.BTN_SHARE_ROSTER].disabled  # nothing picked yet
+
+    picker.channel_id = 800
+    picker._build()
+    done = _inter()
+    done.edit_original_response = AsyncMock()
+    with patch("duties_posts.post", AsyncMock(return_value=None)):
+        await _buttons(picker)[c.BTN_SHARE_ROSTER].callback(done)
+    done.edit_original_response.assert_awaited_once_with(
+        content=c.POST_FAILED.format(channel="<#800>"), view=None
+    )
+
+
+def _share_view(n=3, **duty_kw):
+    for i in range(1, n + 1):
+        db.save_duty(d.Duty(id=0, guild_id=G, name=f"Duty {i}", **duty_kw))
+    view = h.ShareMembersView(_fake_hub())
+    view.render()
+    return view
+
+
+async def test_sharing_with_members_needs_a_duty_and_a_channel(temp_db):
+    view = _share_view()
+    inter = _inter()
+    await _buttons(view)[c.BTN_SHARE_LIST].callback(inter)
+    inter.response.send_message.assert_awaited_once_with(c.SHARE_NEEDS_DUTY, ephemeral=True)
+
+    view.picked = {view.duties[0].id}
+    inter = _inter()
+    await _buttons(view)[c.BTN_SHARE_LIST].callback(inter)
+    inter.response.send_message.assert_awaited_once_with(c.SHARE_NEEDS_CHANNEL, ephemeral=True)
+
+
+async def test_sharing_with_members_saves_the_picks_and_posts(temp_db):
+    view = _share_view()
+    first, _, third = view.duties
+    view.picked = {first.id, third.id}
+    view.backups = False
+    view.channel_id = 900
+    inter = _inter()
+    inter.edit_original_response = AsyncMock()
+    with patch("duties_posts.post", AsyncMock(return_value=MagicMock())) as post:
+        await _buttons(view)[c.BTN_SHARE_LIST].callback(inter)
+    assert post.await_args.args[2:] == (h.duties_posts.SHARED, 900)
+    assert {x.name for x in db.list_duties(G) if x.shared} == {"Duty 1", "Duty 3"}
+    assert db.get_settings(G).shared_backups is False
+    content = inter.edit_original_response.await_args.kwargs["content"]
+    assert content == c.SHARE_ACK[1].format(n=2, channel="<#900>")
+
+
+async def test_paused_picks_are_named_in_the_ack(temp_db):
+    view = _share_view(n=1, paused=True)
+    view.picked = {view.duties[0].id}
+    view.channel_id = 900
+    inter = _inter()
+    inter.edit_original_response = AsyncMock()
+    with patch("duties_posts.post", AsyncMock(return_value=MagicMock())):
+        await _buttons(view)[c.BTN_SHARE_LIST].callback(inter)
+    content = inter.edit_original_response.await_args.kwargs["content"]
+    assert c.SHARE_PAUSED_NOTE.format(names="Duty 1") in content
+
+
+async def test_the_share_picker_pages_and_keeps_picks_from_other_pages(temp_db):
+    view = _share_view(n=30)
+    assert "Page 1 / 2" in _buttons(view)
+    picker = next(x for x in view.children if isinstance(x, discord.ui.Select))
+    assert len(picker.options) == 25
+    picker._values = [picker.options[0].value]
+    await picker.callback(_inter())
+    kept = int(picker.options[0].value)
+
+    await view._turn(_inter(), 1)
+    picker = next(x for x in view.children if isinstance(x, discord.ui.Select))
+    assert len(picker.options) == 5
+    picker._values = [picker.options[-1].value]
+    await picker.callback(_inter())
+    assert view.picked == {kept, int(picker.options[-1].value)}
+
+
+async def test_the_share_screen_starts_from_the_last_share(temp_db):
+    a = db.save_duty(d.Duty(id=0, guild_id=G, name="A"))
+    db.save_duty(d.Duty(id=0, guild_id=G, name="B"))
+    db.set_shared(G, [a])
+    db.update_settings(G, shared_channel_id=900, shared_message_id=5, shared_backups=False)
+    view = h.ShareMembersView(_fake_hub())
+    view.render()
+    assert view.picked == {a} and view.channel_id == 900 and view.backups is False
+    assert c.BTN_SHARE_AGAIN in _buttons(view)

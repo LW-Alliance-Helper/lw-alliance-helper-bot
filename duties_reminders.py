@@ -209,9 +209,9 @@ async def run_reminder_tick(bot, now: datetime | None = None) -> int:
 
 async def handle_departure(bot, member: discord.Member) -> list[str]:
     """Someone left the server. Open every position they held, post the
-    notice naming them, and update the contact buttons. Returns the duties
+    notice naming them, and update every posted message. Returns the duties
     that changed."""
-    import duties_panel
+    import duties_posts
 
     names = await asyncio.to_thread(
         duties_db.vacate_holder, member.guild.id, member.id, member.display_name
@@ -219,5 +219,5 @@ async def handle_departure(bot, member: discord.Member) -> list[str]:
     if not names:
         return []
     await asyncio.to_thread(duties_health.note_departures, member.guild.id)
-    await duties_panel.refresh_panel(bot, member.guild.id)
+    await duties_posts.refresh_all(bot, member.guild.id)
     return names

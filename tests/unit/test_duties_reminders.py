@@ -219,7 +219,7 @@ async def test_a_holder_leaving_opens_their_positions_and_posts_a_notice(seeded_
     duty_id = _duty(primaries=(A, B))
     leaving = w.members[B]
     leaving.guild = w.guild
-    with patch("duties_panel.refresh_panel", AsyncMock()) as refresh:
+    with patch("duties_posts.refresh_all", AsyncMock()) as refresh:
         names = await rem.handle_departure(w.bot, leaving)
     assert names == ["Daily Schedule"]
     assert db.get_duty(G, duty_id).primaries == (A, d.OPEN)
@@ -233,7 +233,7 @@ async def test_someone_holding_nothing_leaving_changes_nothing(seeded_db):
     _duty(primaries=(A,))
     leaving = w.members[C]
     leaving.guild = w.guild
-    with patch("duties_panel.refresh_panel", AsyncMock()) as refresh:
+    with patch("duties_posts.refresh_all", AsyncMock()) as refresh:
         assert await rem.handle_departure(w.bot, leaving) == []
     refresh.assert_not_awaited()
     assert config_health.problems(G) == []

@@ -35,13 +35,19 @@ PANEL_CHANNEL = "duties.panel_channel"
 #: Where ticket threads open: the bot can't open threads there, or members
 #: can't see it.
 TICKET_CHANNEL = "duties.ticket_channel"
+#: Where the full list is shared, in the leadership channel (#706).
+ROSTER_CHANNEL = "duties.roster_channel"
+#: Where the curated list is shared with members (#707).
+SHARED_CHANNEL = "duties.shared_channel"
 #: Someone holding duties left the server.
 HOLDERS = "duties.holders"
 
 for _key, _label, _btn in (
     (REMINDER_CHANNEL, c.SUBJECT_REMINDER_CHANNEL, c.BTN_REMINDERS),
-    (PANEL_CHANNEL, c.SUBJECT_PANEL_CHANNEL, c.BTN_CONTACT),
-    (TICKET_CHANNEL, c.SUBJECT_TICKET_CHANNEL, c.BTN_CONTACT),
+    (PANEL_CHANNEL, c.SUBJECT_PANEL_CHANNEL, c.BTN_POST_CONTACT),
+    (TICKET_CHANNEL, c.SUBJECT_TICKET_CHANNEL, c.BTN_POST_CONTACT),
+    (ROSTER_CHANNEL, c.SUBJECT_ROSTER_CHANNEL, c.BTN_SHARE_LEADERSHIP),
+    (SHARED_CHANNEL, c.SUBJECT_SHARED_CHANNEL, c.BTN_SHARE_MEMBERS),
     (HOLDERS, c.SUBJECT_HOLDERS, c.BTN_EDIT),
 ):
     config_health.register(

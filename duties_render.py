@@ -31,6 +31,11 @@ _FIELD_VALUE = 1024
 _THREAD_NAME = 100
 #: The contact buttons are one message: five rows of five.
 CONTACT_CAP = 25
+#: A posted list is one message, and Discord caps the characters of every
+#: embed in a message together at 6000. Two pages of this, plus a title,
+#: an intro and the "and N more" line, stay under it.
+_POST_PAGE_BUDGET = 2600
+_POST_PAGES = 2
 
 
 def mention(user_id: int) -> str:
@@ -86,34 +91,49 @@ STATE_LAPSED = "lapsed"
 STATE_FREE = "free"
 
 
-def hub_pages(duties: Sequence[d.Duty], name_of: NameOf) -> list[str]:
-    """The duty list cut into pages that fit an embed description.
+def _paginate(
+    duties: Sequence[d.Duty],
+    block: Callable[[d.Duty], str],
+    budget: int,
+    *,
+    headings: bool = True,
+) -> list[tuple[str, int]]:
+    """Duties cut into pages of at most `budget` characters, as (text, how
+    many duties are on it).
 
     Grouped by category with the category as a heading. A category that
     spills onto the next page repeats its heading there, so a page never
-    starts mid-group with nothing saying which group it is.
+    starts mid-group with nothing saying which group it is. `headings=False`
+    leaves them out.
     """
-    pages: list[str] = []
+    pages: list[tuple[str, int]] = []
     current: list[str] = []
-    size = 0
+    count = size = 0
     for category, items in d.by_category(duties):
         heading = f"### {category or c.HUB_NO_CATEGORY}"
-        wrote_heading = False
+        wrote_heading = not headings
         for duty in items:
-            block = duty_block(duty, name_of)
-            needed = len(block) + 2 + (0 if wrote_heading else len(heading) + 1)
-            if current and size + needed > _DESCRIPTION_BUDGET:
-                pages.append("\n\n".join(current))
-                current, size, wrote_heading = [], 0, False
-                needed = len(block) + 2 + len(heading) + 1
+            text = block(duty)
+            needed = len(text) + 2 + (0 if wrote_heading else len(heading) + 1)
+            if current and size + needed > budget:
+                pages.append(("\n\n".join(current), count))
+                current, count, size, wrote_heading = [], 0, 0, not headings
+                needed = len(text) + 2 + (0 if wrote_heading else len(heading) + 1)
             if not wrote_heading:
                 current.append(heading)
                 wrote_heading = True
-            current.append(block)
+            current.append(text)
+            count += 1
             size += needed
     if current:
-        pages.append("\n\n".join(current))
-    return pages or [""]
+        pages.append(("\n\n".join(current), count))
+    return pages
+
+
+def hub_pages(duties: Sequence[d.Duty], name_of: NameOf) -> list[str]:
+    """The duty list cut into pages that fit an embed description."""
+    pages = _paginate(duties, lambda x: duty_block(x, name_of), _DESCRIPTION_BUDGET)
+    return [text for text, _ in pages] or [""]
 
 
 def hub_embed(
@@ -622,3 +642,112 @@ def departure_detail(departures: Iterable) -> str:
             )
         )
     return "\n".join(lines)
+
+
+# ── Posted lists (#706, #707) ────────────────────────────────────────────────
+
+
+def _post_embeds(
+    duties: Sequence[d.Duty],
+    block: Callable[[d.Duty], str],
+    *,
+    title: str,
+    intro: str,
+    empty: str,
+    more: tuple[str, str],
+) -> list[discord.Embed]:
+    """A list posted as one message: the first embed carries the title and
+    the intro, a second one carries the rest, and anything past that is
+    counted in a closing line rather than cut off mid-duty."""
+    # A list with no categories at all reads better without a lone "Other
+    # duties" heading over everything.
+    pages = _paginate(duties, block, _POST_PAGE_BUDGET, headings=any(x.category for x in duties))
+    shown = pages[:_POST_PAGES]
+    left = sum(n for _, n in pages[_POST_PAGES:])
+    texts = [text for text, _ in shown] or [empty]
+    if left:
+        texts[-1] += "\n\n" + more[0 if left == 1 else 1].format(n=left)
+    embeds = []
+    for i, text in enumerate(texts):
+        if i == 0:
+            description = f"{intro}\n\n{text}" if intro else text
+            embed = discord.Embed(title=title, description=description[:4096])
+        else:
+            embed = discord.Embed(description=text[:4096])
+        embed.color = discord.Color.blurple()
+        embeds.append(embed)
+    return embeds
+
+
+def roster_embeds(duties: Sequence[d.Duty], name_of: NameOf) -> list[discord.Embed]:
+    """The full list in the leadership channel (#706). Every duty, the way
+    the hub lists it: paused ones marked, open positions shown, backups
+    included. Spotting gaps is half of what it is for."""
+    return _post_embeds(
+        duties,
+        lambda x: duty_block(x, name_of),
+        title=c.ROSTER_TITLE,
+        intro=c.ROSTER_INTRO,
+        empty=c.ROSTER_EMPTY,
+        more=c.ROSTER_MORE,
+    )
+
+
+def shared_duties(duties: Iterable[d.Duty]) -> list[d.Duty]:
+    """What the curated list shows: picked and not paused."""
+    return [x for x in duties if x.shared and not x.paused]
+
+
+def shared_block(duty: d.Duty, name_of: NameOf, *, backups: bool) -> str:
+    """One duty on the curated list, worded as the contact buttons word it
+    for members. No open positions: a gap is leadership's to see, not
+    members'."""
+    lines = [f"**{duty.name}**"]
+    if duty.description:
+        lines.append(duty.description)
+    primaries = _who(duty, d.SLOT_PRIMARY, name_of)
+    if primaries:
+        lines.append(c.PANEL_HELD_BY.format(who=_join(primaries)))
+    if backups:
+        names = _who(duty, d.SLOT_BACKUP, name_of)
+        if names:
+            lines.append(c.PANEL_BACKUP.format(who=_join(names)))
+    return "\n".join(lines)
+
+
+def shared_embeds(
+    duties: Sequence[d.Duty], name_of: NameOf, *, backups: bool
+) -> list[discord.Embed]:
+    """The curated list shared with members (#707)."""
+    return _post_embeds(
+        shared_duties(duties),
+        lambda x: shared_block(x, name_of, backups=backups),
+        title=c.SHARED_TITLE,
+        intro="",
+        empty=c.SHARED_EMPTY,
+        more=c.SHARED_MORE,
+    )
+
+
+def share_settings_embed(
+    *,
+    picked: Sequence[d.Duty],
+    backups: bool,
+    channel_id: int,
+    posted: bool,
+) -> discord.Embed:
+    """The curated list's share screen."""
+    names = ", ".join(x.name + (c.PAUSED_MARK if x.paused else "") for x in picked)
+    lines = [
+        c.SHARE_INTRO,
+        "",
+        c.SHARE_PICKED_LINE.format(names=names or c.SHARE_NONE_PICKED),
+        c.SHARE_SHOWS_LINE.format(who=c.SHOW_BOTH if backups else c.SHOW_PRIMARY),
+        c.SHARE_CHANNEL_LINE.format(
+            channel=f"<#{channel_id}>" if channel_id else c.CONTACT_NOT_SET
+        ),
+        c.SHARE_POSTED if posted else c.SHARE_NOT_POSTED,
+    ]
+    return discord.Embed(
+        title=c.SHARE_TITLE, description="\n".join(lines)[:4096], color=discord.Color.blurple()
+    )

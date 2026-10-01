@@ -351,3 +351,84 @@ def test_a_reminder_without_a_time_is_refused(temp_db):
     duty_id = db.save_duty(new_duty())
     with pytest.raises(ValueError):
         db.save_reminder(new_reminder(duty_id, at=None))
+
+
+def test_settings_carry_all_three_posts(temp_db):
+    full = db.DutiesSettings(
+        guild_id=G,
+        panel_channel_id=1,
+        panel_message_id=2,
+        ticket_channel_id=3,
+        roster_channel_id=4,
+        roster_message_id=5,
+        shared_channel_id=6,
+        shared_message_id=7,
+        shared_backups=False,
+    )
+    db.save_settings(full)
+    assert db.get_settings(G) == full
+
+
+def test_update_settings_keeps_what_it_was_not_given(temp_db):
+    db.update_settings(G, panel_channel_id=1, panel_message_id=2)
+    saved = db.update_settings(G, roster_message_id=9)
+    assert (saved.panel_channel_id, saved.panel_message_id, saved.roster_message_id) == (1, 2, 9)
+    assert saved.shared_backups is True  # the default: primary and backup
+
+
+def test_set_shared_makes_exactly_those_duties_picked(temp_db):
+    a = db.save_duty(new_duty("A"))
+    b = db.save_duty(new_duty("B"))
+    other = db.save_duty(new_duty("A", guild_id=OTHER_G))
+    db.set_shared(OTHER_G, [other])
+    db.set_shared(G, [a])
+    db.set_shared(G, [b])
+    assert {x.name: x.shared for x in db.list_duties(G)} == {"A": False, "B": True}
+    assert db.list_duties(OTHER_G)[0].shared  # another server's picks untouched
+
+
+def test_saving_a_duty_keeps_its_share_pick(temp_db):
+    duty_id = db.save_duty(new_duty())
+    db.set_shared(G, [duty_id])
+    db.save_duty(replace(db.get_duty(G, duty_id), description="edited"))
+    assert db.get_duty(G, duty_id).shared
+
+
+def test_a_database_from_1_10_0_gains_the_new_columns(tmp_path, monkeypatch):
+    """The tables shipped in 1.10.0 without them, so an upgrade adds them."""
+    import sqlite3
+
+    path = str(tmp_path / "old.db")
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE guild_duties (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER "
+        "NOT NULL, name TEXT NOT NULL COLLATE NOCASE, category_id INTEGER NOT NULL DEFAULT 0, "
+        "description TEXT NOT NULL DEFAULT '', paused INTEGER NOT NULL DEFAULT 0, "
+        "contact_enabled INTEGER NOT NULL DEFAULT 0, sort_order INTEGER NOT NULL DEFAULT 0, "
+        "UNIQUE (guild_id, name))"
+    )
+    conn.execute(
+        "CREATE TABLE guild_duties_config (guild_id INTEGER PRIMARY KEY, panel_channel_id "
+        "INTEGER NOT NULL DEFAULT 0, panel_message_id INTEGER NOT NULL DEFAULT 0, "
+        "ticket_channel_id INTEGER NOT NULL DEFAULT 0)"
+    )
+    conn.execute("INSERT INTO guild_duties (guild_id, name) VALUES (?, 'Old')", (G,))
+    conn.execute("INSERT INTO guild_duties_config (guild_id, panel_channel_id) VALUES (?, 5)", (G,))
+    conn.commit()
+
+    conn.row_factory = sqlite3.Row
+    db.create_tables(conn)
+    db.create_tables(conn)  # a second run is a no-op
+    conn.commit()
+    conn.close()
+
+    def _conn():
+        c = sqlite3.connect(path)
+        c.row_factory = sqlite3.Row
+        return c
+
+    monkeypatch.setattr(config, "_get_conn", _conn)
+    (old,) = db.list_duties(G)
+    assert old.shared is False
+    settings = db.get_settings(G)
+    assert settings.panel_channel_id == 5 and settings.shared_backups is True

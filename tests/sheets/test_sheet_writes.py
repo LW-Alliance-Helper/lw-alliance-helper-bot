@@ -80,6 +80,52 @@ class TestSurveySheetWrites:
         assert "43.27" in data_row
         assert "War Leader" in data_row
 
+    def test_a_real_length_discord_id_survives_and_matches(self, seeded_db, squad_powers_tab):
+        """Real Discord IDs are 17-19 digits. Written with USER_ENTERED, the
+        Sheet may read one as a number and keep 15 digits, so the stored ID
+        would no longer equal the member's and every resubmit would append a
+        duplicate row. The other tests here use 6-digit IDs, which can't show
+        it. Found in the #668 audit; this test is the check."""
+        ws, tab_name = squad_powers_tab
+        from survey import update_squad_powers
+        from config import save_survey_config
+
+        questions = [
+            {
+                "key": "power",
+                "label": "Power",
+                "type": "text",
+                "options": [],
+                "placeholder": "",
+                "max_chars": 0,
+            },
+        ]
+        save_survey_config(TEST_GUILD_ID, tab_name, "_unused_history", questions, "")
+
+        import gspread, json
+        from google.oauth2.service_account import Credentials
+        from unittest.mock import patch
+
+        creds_json = os.environ.get("GOOGLE_CREDENTIALS_JSON")
+        info = json.loads(creds_json)
+        scopes = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        creds = Credentials.from_service_account_info(info, scopes=scopes)
+        client = gspread.authorize(creds)
+        sh = client.open_by_key(TEST_SHEET_ID)
+
+        snowflake = "1497432945827516639"
+        with patch("survey._get_spreadsheet", return_value=sh):
+            update_squad_powers(snowflake, "Alpha", {"power": "40"}, guild_id=TEST_GUILD_ID)
+            time.sleep(1)
+            update_squad_powers(snowflake, "Alpha", {"power": "41"}, guild_id=TEST_GUILD_ID)
+
+        time.sleep(1)
+        all_vals = ws.get_all_values()
+        data_rows = [r for r in all_vals[1:] if any(r)]
+        assert [r[1] for r in data_rows] == [snowflake], (
+            f"Expected one row carrying the ID intact, got {data_rows}"
+        )
+
     def test_update_squad_powers_updates_existing_row(self, seeded_db, squad_powers_tab):
         ws, tab_name = squad_powers_tab
         from survey import update_squad_powers

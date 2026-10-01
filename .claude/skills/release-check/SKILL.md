@@ -119,6 +119,21 @@ question to Kevin, and did Kevin actually answer it — not just posed
 and moved past? An open question with no recorded answer is a finding,
 even if it was asked.
 
+**Then sweep the website for what this release changed, whether or not
+anyone opened a branch for it.** Every release, not only the ones that
+look website-shaped (Kevin, 2026-09-30: "with every release we need to
+be double checking the website and updating it"). List every command,
+subcommand, hub button and feature name the release renamed, retired or
+added, from the diff against `main` and the rolled-in issues, then grep
+`../lw-alliance-helper.github.io` (mainly `index.html` and
+`commands.html`) for each one. A page still naming something this
+release retired or renamed is a finding; so is a new command or hub
+button the site never mentions. The fix rides a website `release/X.Y.Z`
+branch merged alongside this release. #671 is the case that raised it:
+the redesign retires `/growth overview` and `/growth breakdown`, which
+the home page's command table still named, and the branch check above
+would never have looked.
+
 ## 5. New required environment variables
 
 Grep this branch's diff against its base for anything reading an

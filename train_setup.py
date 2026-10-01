@@ -93,7 +93,8 @@ class _Wizard:
         await self.wait(view)
         value = getattr(view, attr)
         if not value and value is not False:
-            await self.timed_out()
+            if not wizard_registry.prompt_said_timeout(view):
+                await self.timed_out()
             raise _Abort
         return value
 

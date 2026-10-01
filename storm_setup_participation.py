@@ -144,7 +144,8 @@ class _Walk:
         await self.wait(view)
         value = getattr(view, attr)
         if value is None:
-            await self.timed_out()
+            if not wizard_registry.prompt_said_timeout(view):
+                await self.timed_out()
             raise _Abort
         return value
 

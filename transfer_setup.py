@@ -1915,7 +1915,7 @@ async def _step_removal(channel, guild_id, owner_id, cancel_event):
     if view.cancelled:
         return "CANCEL"
     if view.selected is None:
-        return "TIMEOUT"
+        return "EXPIRED" if wizard_registry.prompt_said_timeout(view) else "TIMEOUT"
     config.update_transfer_config_field(guild_id, "notify_on_delete", 1 if view.selected else 0)
     return "OK"
 
@@ -1936,7 +1936,7 @@ async def _step_enrich(channel, guild_id, owner_id, cancel_event):
     if view.cancelled:
         return "CANCEL"
     if view.selected is None:
-        return "TIMEOUT"
+        return "EXPIRED" if wizard_registry.prompt_said_timeout(view) else "TIMEOUT"
     config.update_transfer_config_field(guild_id, "source_enrich_blanks", 1 if view.selected else 0)
     await channel.send(
         "✅ Blank-cell fill-in is "
@@ -2606,7 +2606,7 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
             fresh = config.get_transfer_config(guild_id)
             if fresh.get("server_wide_enabled") or fresh.get("alliance_form_enabled"):
                 en = await _step_enrich(channel, guild_id, user.id, cancel_event)
-                if en == "CANCEL":
+                if en in ("CANCEL", "EXPIRED"):
                     return
                 if en == "TIMEOUT":
                     await channel.send(_TIMEOUT_MSG)
@@ -2632,7 +2632,7 @@ async def run_transfer_setup(interaction: discord.Interaction, bot):
                 )
             ):
                 rm = await _step_removal(channel, guild_id, user.id, cancel_event)
-                if rm == "CANCEL":
+                if rm in ("CANCEL", "EXPIRED"):
                     return
                 if rm == "TIMEOUT":
                     await channel.send(_TIMEOUT_MSG)
@@ -2857,7 +2857,7 @@ async def _run_edit_menu(channel, guild_id, user, cancel_event) -> str:
         if view.choice == "resetup":
             return "RESETUP"
         status = await _edit_section(channel, guild_id, user, cfg, cancel_event, view.choice)
-        if status == "CANCEL":
+        if status in ("CANCEL", "EXPIRED"):
             return "DONE"
         if status == "TIMEOUT":
             await channel.send(_TIMEOUT_MSG)
@@ -2886,7 +2886,8 @@ async def _edit_gate(channel, owner_id, title, current_summary, cancel_event) ->
 
 async def _edit_section(channel, guild_id, user, cfg, cancel_event, section) -> str:
     """Dispatch one section editor. Returns ``"OK"`` / ``"KEEP"`` / ``"CANCEL"``
-    / ``"TIMEOUT"``."""
+    / ``"TIMEOUT"``, or ``"EXPIRED"`` when a prompt timed out and already said
+    so on itself (#679), which ends the editor without a second line."""
     handlers = {
         "columns": _edit_columns,
         "filter": _edit_filter,
@@ -3127,7 +3128,7 @@ async def _edit_removal(channel, guild_id, user, cfg, cancel_event) -> str:
     if g != "change":
         return g
     rm = await _step_removal(channel, guild_id, user.id, cancel_event)
-    if rm in ("CANCEL", "TIMEOUT"):
+    if rm in ("CANCEL", "TIMEOUT", "EXPIRED"):
         return rm
     await channel.send("✅ Removal notices updated.")
     return "OK"
@@ -3210,7 +3211,7 @@ async def _run_submenu(channel, guild_id, user, cancel_event, *, title, specs, h
                 pass
             return "OK" if view.choice == "back" else "TIMEOUT"
         status = await handlers[view.choice](channel, guild_id, user, cfg, cancel_event)
-        if status in ("CANCEL", "TIMEOUT"):
+        if status in ("CANCEL", "TIMEOUT", "EXPIRED"):
             return status
         # OK / KEEP → loop and re-post the sub-menu.
 

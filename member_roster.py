@@ -1265,7 +1265,8 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
     if filter_view.cancelled:
         return
     if filter_view.selected is None:
-        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_MEMBERS))
+        if not wizard_registry.prompt_said_timeout(filter_view):
+            await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_MEMBERS))
         return
     role_filter_id = member_role_id if filter_view.selected else 0
 
@@ -1281,7 +1282,8 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
     if auto_view.cancelled:
         return
     if auto_view.selected is None:
-        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_MEMBERS))
+        if not wizard_registry.prompt_said_timeout(auto_view):
+            await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_MEMBERS))
         return
     auto_sync = 1 if auto_view.selected else 0
 

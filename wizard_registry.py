@@ -395,6 +395,19 @@ class OwnedView(ExpiringView):
         return await super().interaction_check(interaction)
 
 
+def prompt_said_timeout(view) -> bool:
+    """True when `view` timed out and its own `on_timeout` puts the notice
+    on the prompt (an `ExpiringView` with a hint). A wizard then posts no
+    follow-up line, which would say the same thing again (#679, decided on
+    its sign-off page). Reads the `timed_out` flag `wait_view_or_cancel`
+    sets, so a modal dismissed inside a view is not mistaken for a timeout."""
+    return (
+        bool(getattr(view, "timed_out", False))
+        and isinstance(view, ExpiringView)
+        and view.timeout_hint is not None
+    )
+
+
 async def wait_view_or_cancel(view, cancel_event):
     """Race a discord.ui.View's wait() against a cancel event.
 
@@ -423,11 +436,12 @@ async def wait_view_or_cancel(view, cancel_event):
             return
         # ... use view.selected_X
     """
-    # Initialise the attribute so callers can rely on its presence.
+    # Initialise the attributes so callers can rely on their presence.
     view.cancelled = False
+    view.timed_out = False
 
     if cancel_event is None:
-        await view.wait()
+        view.timed_out = bool(await view.wait())
         return
 
     cancel_task = asyncio.create_task(cancel_event.wait())
@@ -447,6 +461,9 @@ async def wait_view_or_cancel(view, cancel_event):
                 t.cancel()
         else:
             cancel_task.cancel()
+            # `View.wait()` returns True only when the view's own timeout
+            # fired; a callback's `stop()` returns False.
+            view.timed_out = bool(view_task.result())
     except asyncio.CancelledError:
         view_task.cancel()
         cancel_task.cancel()

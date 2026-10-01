@@ -92,7 +92,8 @@ class _Wizard:
         await self.wait(view)
         value = getattr(view, attr)
         if value is None:
-            await self.channel.send(TIMEOUT_MSG)
+            if not wizard_registry.prompt_said_timeout(view):
+                await self.channel.send(TIMEOUT_MSG)
             raise _Abort
         return value
 

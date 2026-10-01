@@ -47,7 +47,11 @@ def _attendance_tab_name(guild_id: int, event_type: str) -> str:
 
 def _read_tab_values(guild_id: int, tab_name: str) -> tuple[list[list[str]], list[str]]:
     """Generic Sheet-tab reader. Returns `(rows, errors)`. Missing tab
-    returns `([], [])` so callers degrade gracefully."""
+    returns `([], [])` so callers degrade gracefully.
+
+    A read never creates the tab. It used to, which left an empty,
+    headerless Rosters tab for the first Approve & Post to append rows
+    under, and an Attendance tab nothing writes any more (#719)."""
     import config
 
     try:
@@ -57,7 +61,7 @@ def _read_tab_values(guild_id: int, tab_name: str) -> tuple[list[list[str]], lis
     if sh is None:
         return [], []
     try:
-        ws = config.get_or_create_worksheet(sh, tab_name)
+        ws = sh.worksheet(tab_name)
     except Exception:
         return [], []
     try:
@@ -204,11 +208,35 @@ def load_event_attendance(
     Keys use `_attendance_join_key` so the join with rosters_tab is
     whitespace/case-tolerant; callers that look up by member must
     normalize the same way.
+
+    Since #245 attendance is recorded per member in the Member Log
+    (`showed_up`), not per slot in the legacy Attendance tab, and this
+    used to read only the legacy tab: history showed no attendance for
+    any event after the cutover (#719). Member Log entries come back
+    under a member-only key, `_attendance_join_key("", "", member)`,
+    which the renderer falls back to; legacy rows, for events recorded
+    before the cutover, keep their slot keys and win where both exist.
     """
+    import storm_attendance
+
+    out: dict[tuple[str, str, str], str] = {}
+    try:
+        flags = storm_attendance._read_member_log_for_date(guild_id, event_type, event_date)
+    except Exception:
+        flags = {}
+    flag_to_status = {
+        "yes": storm_attendance.STATUS_ATTENDED,
+        "no": storm_attendance.STATUS_NO_SHOW,
+    }
+    for member, flag in flags.items():
+        status = flag_to_status.get((flag or "").strip().lower())
+        if status:
+            out[_attendance_join_key("", "", member)] = status
+
     tab = _attendance_tab_name(guild_id, event_type)
     rows, errors = _read_tab_values(guild_id, tab) if tab else ([], [])
     if not rows:
-        return {}, errors
+        return out, errors
 
     header = [c.strip() for c in rows[0]]
 
@@ -224,7 +252,6 @@ def load_event_attendance(
     member_col = _col("Member")
     status_col = _col("Status")
 
-    out: dict[tuple[str, str, str], str] = {}
     for row in rows[1:]:
 
         def _cell(idx: int) -> str:
@@ -332,7 +359,9 @@ def render_event_embed(
             slot["zone"],
             slot["member"],
         )
-        status = attendance.get(key, "")
+        status = attendance.get(key) or attendance.get(
+            _attendance_join_key("", "", slot["member"]), ""
+        )
         glyph = _STATUS_GLYPH.get(status, "—")
         if status == "attended":
             total_recorded += 1

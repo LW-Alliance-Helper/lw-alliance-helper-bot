@@ -410,3 +410,77 @@ def test_departure_detail():
         "**Zed** left the server. Their duty **One** now has an open position.",
         "**Someone** left the server. Their duties **Two** and **Three** now have an open position.",
     ]
+
+
+# ── Posted lists (#706, #707) ────────────────────────────────────────────────
+
+
+def _text(embeds):
+    return "\n".join(e.description or "" for e in embeds)
+
+
+def test_the_full_list_shows_everything_including_gaps():
+    duties = [
+        duty(1, name="Disputes", primaries=(A, d.OPEN), backups=(B,)),
+        duty(2, name="Schedule", paused=True),
+    ]
+    embeds = r.roster_embeds(duties, name_of)
+    text = _text(embeds)
+    assert embeds[0].title == c.ROSTER_TITLE
+    assert c.ROSTER_INTRO in text
+    assert "Disputes" in text and "Bravo" in text and c.OPEN_MARK in text
+    assert f"Schedule**{c.PAUSED_MARK}" in text
+
+
+def test_a_long_list_stays_inside_one_message_and_says_what_is_left():
+    duties = [duty(i, name=f"Duty {i} " + "x" * 200, primaries=(A,)) for i in range(1, 60)]
+    embeds = r.roster_embeds(duties, name_of)
+    assert len(embeds) == 2
+    # Discord's cap is on every embed in a message together.
+    assert sum(len(e.title or "") + len(e.description or "") for e in embeds) < 6000
+    shown = _text(embeds).count("**Duty ")
+    assert c.ROSTER_MORE[1].format(n=59 - shown) in embeds[-1].description
+
+
+def test_posts_skip_the_heading_when_nothing_has_a_category():
+    assert c.HUB_NO_CATEGORY not in _text(r.roster_embeds([duty(1)], name_of))
+    categorized = [duty(1, category="VS"), duty(2)]
+    text = _text(r.roster_embeds(categorized, name_of))
+    assert "### VS" in text and f"### {c.HUB_NO_CATEGORY}" in text
+
+
+def test_the_curated_list_is_picked_running_duties_without_gaps():
+    duties = [
+        duty(1, name="VS", shared=True, description="Daily VS plan", primaries=(A, d.OPEN)),
+        duty(2, name="Season", shared=True, paused=True),
+        duty(3, name="Disputes"),
+    ]
+    text = _text(r.shared_embeds(duties, name_of, backups=True))
+    assert "Daily VS plan" in text and c.PANEL_HELD_BY.format(who="Alpha") in text
+    assert "Season" not in text and "Disputes" not in text
+    assert c.OPEN_MARK not in text
+
+
+def test_primary_only_leaves_backups_off():
+    duties = [duty(1, shared=True, primaries=(A,), backups=(B, d.ANYONE))]
+    both = _text(r.shared_embeds(duties, name_of, backups=True))
+    primary = _text(r.shared_embeds(duties, name_of, backups=False))
+    assert "Bravo" in both and c.ANYONE_IN_LEADERSHIP in both
+    assert "Bravo" not in primary and c.ANYONE_IN_LEADERSHIP not in primary
+
+
+def test_an_empty_curated_list_says_so():
+    (embed,) = r.shared_embeds([duty(1, shared=True, paused=True)], name_of, backups=True)
+    assert embed.description == c.SHARED_EMPTY
+
+
+def test_the_share_screen_reflects_the_choices():
+    embed = r.share_settings_embed(
+        picked=[duty(1, name="VS"), duty(2, name="Season", paused=True)],
+        backups=False,
+        channel_id=600,
+        posted=True,
+    )
+    assert f"VS, Season{c.PAUSED_MARK}" in embed.description
+    assert c.SHOW_PRIMARY in embed.description and "<#600>" in embed.description
+    assert c.SHARE_POSTED in embed.description

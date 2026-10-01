@@ -17,6 +17,7 @@ from discord.ext import commands, tasks
 import duties_copy as c
 import duties_health  # noqa: F401 - registers the config_health subjects
 import duties_panel
+import duties_posts
 import duties_reminders
 
 logger = logging.getLogger(__name__)
@@ -28,8 +29,10 @@ class DutiesCog(commands.Cog):
 
     async def cog_load(self) -> None:
         # Survives a redeploy: the contact buttons carry their duty id in
-        # their custom id, and the Close button is one static id.
+        # their custom id, and the Close and My duties buttons are one static
+        # id each.
         duties_panel.register_persistent_items(self.bot)
+        duties_posts.register_persistent_items(self.bot)
         self.reminder_loop.start()
 
     async def cog_unload(self) -> None:

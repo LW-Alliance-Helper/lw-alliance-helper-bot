@@ -30,6 +30,7 @@ import duties as d
 import duties_copy as c
 import duties_db
 import duties_health
+import duties_posts
 import duties_render
 
 logger = logging.getLogger(__name__)
@@ -96,105 +97,27 @@ def _panel_payload(guild_id: int) -> dict:
     }
 
 
+CONTACT = duties_posts.PostKind(
+    channel_field="panel_channel_id",
+    message_field="panel_message_id",
+    subject=duties_health.PANEL_CHANNEL,
+    payload=_panel_payload,
+    name="contact buttons",
+)
+
+
 async def post_panel(bot, guild_id: int, channel_id: int) -> discord.Message | None:
     """Post the contact buttons in `channel_id`, replacing any earlier post
     so there is only ever one. Returns the message, or None if the bot
     couldn't post (recorded against the panel channel)."""
-    channel = bot.get_channel(int(channel_id)) if channel_id else None
-    if channel is None:
-        config_health.record(
-            guild_id,
-            duties_health.PANEL_CHANNEL,
-            config_health.CHANNEL_GONE,
-            "",
-            discriminator=str(channel_id),
-        )
-        return None
-    settings = duties_db.get_settings(guild_id)
-    try:
-        message = await channel.send(**_panel_payload(guild_id))
-    except discord.Forbidden:
-        config_health.record(
-            guild_id,
-            duties_health.PANEL_CHANNEL,
-            config_health.CHANNEL_NO_SEND,
-            "",
-            discriminator=str(channel_id),
-        )
-        return None
-    except discord.HTTPException as e:
-        logger.warning("[DUTIES] guild=%s could not post contact buttons: %s", guild_id, e)
-        return None
-    config_health.clear(guild_id, duties_health.PANEL_CHANNEL)
-    old_channel, old_id = settings.panel_channel_id, settings.panel_message_id
-    duties_db.save_settings(
-        duties_db.DutiesSettings(
-            guild_id=guild_id,
-            panel_channel_id=int(channel_id),
-            panel_message_id=message.id,
-            ticket_channel_id=settings.ticket_channel_id,
-        )
-    )
-    if old_id and old_id != message.id:
-        old = bot.get_channel(old_channel) if old_channel else None
-        if old is not None:
-            try:
-                await old.get_partial_message(old_id).delete()
-            except discord.HTTPException:
-                pass  # already gone, or no longer ours to delete
-    return message
+    return await duties_posts.post(bot, guild_id, CONTACT, channel_id)
 
 
 async def refresh_panel(bot, guild_id: int) -> bool:
-    """Edit the posted message to match the duty list. Returns True if it
-    was edited. Safe to call after every change: no post, no-op.
-
-    A message someone deleted is forgotten rather than reported, since
-    deleting it was leadership's own choice and the settings screen shows it
-    as not posted. A channel the bot can no longer reach is config rot and
-    goes to `config_health`.
-    """
-    settings = duties_db.get_settings(guild_id)
-    if not settings.panel_message_id or not settings.panel_channel_id:
-        return False
-    channel = bot.get_channel(settings.panel_channel_id)
-    if channel is None:
-        config_health.record(
-            guild_id,
-            duties_health.PANEL_CHANNEL,
-            config_health.CHANNEL_GONE,
-            "",
-            discriminator=str(settings.panel_channel_id),
-        )
-        return False
-    try:
-        await channel.get_partial_message(settings.panel_message_id).edit(
-            **_panel_payload(guild_id)
-        )
-    except discord.NotFound:
-        duties_db.save_settings(
-            duties_db.DutiesSettings(
-                guild_id=guild_id,
-                panel_channel_id=settings.panel_channel_id,
-                panel_message_id=0,
-                ticket_channel_id=settings.ticket_channel_id,
-            )
-        )
-        return False
-    except discord.Forbidden:
-        config_health.record(
-            guild_id,
-            duties_health.PANEL_CHANNEL,
-            config_health.CHANNEL_NO_VIEW,
-            "",
-            discriminator=str(settings.panel_channel_id),
-        )
-        return False
-    except discord.HTTPException as e:
-        logger.warning("[DUTIES] guild=%s could not update contact buttons: %s", guild_id, e)
-        return False
-    config_health.clear(guild_id, duties_health.PANEL_CHANNEL)
-    return True
+    """Edit the posted contact buttons to match the duty list. Returns True
+    if it was edited. A change to the duties refreshes every post through
+    `duties_posts.refresh_all`; this is for when only this one is stale."""
+    return await duties_posts.refresh(bot, guild_id, CONTACT)
 
 
 def register_persistent_items(bot) -> None:

@@ -23,7 +23,7 @@ a `tasks.loop` body goes through `asyncio.to_thread` (see CLAUDE.md).
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, time
 
 import config
@@ -61,6 +61,7 @@ def create_tables(conn: sqlite3.Connection) -> None:
             paused                   INTEGER NOT NULL DEFAULT 0,
             contact_enabled          INTEGER NOT NULL DEFAULT 0,
             sort_order               INTEGER NOT NULL DEFAULT 0,
+            shared                   INTEGER NOT NULL DEFAULT 0,
             UNIQUE (guild_id, name)
         )
     """)
@@ -126,17 +127,42 @@ def create_tables(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_guild_duty_reminders_duty "
         "ON guild_duty_reminders (guild_id, duty_id)"
     )
-    # Server-wide settings: where the contact panel is posted (and which
-    # message it is, so the bot can edit it when a duty changes hands) and
-    # which channel ticket threads open under.
+    # Server-wide settings: where each posted message is (and which message
+    # it is, so the bot can edit it when a duty changes hands) and which
+    # channel ticket threads open under. Three posts: the contact buttons,
+    # the full list in the leadership channel (#706), and the curated list
+    # shared with members (#707), whose last setting is whether it names
+    # backups.
     conn.execute("""
         CREATE TABLE IF NOT EXISTS guild_duties_config (
-            guild_id          INTEGER PRIMARY KEY,
-            panel_channel_id  INTEGER NOT NULL DEFAULT 0,
-            panel_message_id  INTEGER NOT NULL DEFAULT 0,
-            ticket_channel_id INTEGER NOT NULL DEFAULT 0
+            guild_id           INTEGER PRIMARY KEY,
+            panel_channel_id   INTEGER NOT NULL DEFAULT 0,
+            panel_message_id   INTEGER NOT NULL DEFAULT 0,
+            ticket_channel_id  INTEGER NOT NULL DEFAULT 0,
+            roster_channel_id  INTEGER NOT NULL DEFAULT 0,
+            roster_message_id  INTEGER NOT NULL DEFAULT 0,
+            shared_channel_id  INTEGER NOT NULL DEFAULT 0,
+            shared_message_id  INTEGER NOT NULL DEFAULT 0,
+            shared_backups     INTEGER NOT NULL DEFAULT 1
         )
     """)
+    # Columns added after 1.10.0 shipped the tables (#706, #707).
+    for table, col, decl in _ADDED_COLUMNS:
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+            print(f"[CONFIG] Added {col} to {table}")
+        except sqlite3.OperationalError:
+            pass  # already there
+
+
+_ADDED_COLUMNS = (
+    ("guild_duties", "shared", "INTEGER NOT NULL DEFAULT 0"),
+    ("guild_duties_config", "roster_channel_id", "INTEGER NOT NULL DEFAULT 0"),
+    ("guild_duties_config", "roster_message_id", "INTEGER NOT NULL DEFAULT 0"),
+    ("guild_duties_config", "shared_channel_id", "INTEGER NOT NULL DEFAULT 0"),
+    ("guild_duties_config", "shared_message_id", "INTEGER NOT NULL DEFAULT 0"),
+    ("guild_duties_config", "shared_backups", "INTEGER NOT NULL DEFAULT 1"),
+)
 
 
 # ── Duties ───────────────────────────────────────────────────────────────────
@@ -168,6 +194,7 @@ def _duty_from_row(row: sqlite3.Row, holders: dict[str, list[int]] | None) -> Du
         backups=tuple(holders.get(SLOT_BACKUP, ())),
         paused=bool(row["paused"]),
         contact_enabled=bool(row["contact_enabled"]),
+        shared=bool(row["shared"]),
         sort_order=row["sort_order"],
     )
 
@@ -229,6 +256,7 @@ def save_duty(duty: Duty) -> int:
         duty.description.strip(),
         int(duty.paused),
         int(duty.contact_enabled),
+        int(duty.shared),
         int(duty.sort_order),
     )
     try:
@@ -236,7 +264,7 @@ def save_duty(duty: Duty) -> int:
             if duty.id:
                 cur = conn.execute(
                     "UPDATE guild_duties SET name = ?, category_id = ?, description = ?, "
-                    "paused = ?, contact_enabled = ?, "
+                    "paused = ?, contact_enabled = ?, shared = ?, "
                     "sort_order = ? WHERE guild_id = ? AND id = ?",
                     (*values, duty.guild_id, duty.id),
                 )
@@ -246,8 +274,8 @@ def save_duty(duty: Duty) -> int:
             else:
                 cur = conn.execute(
                     "INSERT INTO guild_duties (name, category_id, description, "
-                    "paused, contact_enabled, sort_order, guild_id) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "paused, contact_enabled, shared, sort_order, guild_id) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     (*values, duty.guild_id),
                 )
                 duty_id = int(cur.lastrowid)
@@ -352,6 +380,19 @@ def set_duty_paused(guild_id: int, duty_id: int, paused: bool) -> bool:
         ).rowcount
         conn.commit()
     return n > 0
+
+
+def set_shared(guild_id: int, duty_ids) -> None:
+    """Make `duty_ids` exactly the duties picked for the curated member
+    list (#707): every other duty in the server is unpicked."""
+    ids = {int(x) for x in duty_ids}
+    with config._get_conn() as conn:
+        conn.execute("UPDATE guild_duties SET shared = 0 WHERE guild_id = ?", (guild_id,))
+        conn.executemany(
+            "UPDATE guild_duties SET shared = 1 WHERE guild_id = ? AND id = ?",
+            [(guild_id, x) for x in sorted(ids)],
+        )
+        conn.commit()
 
 
 def delete_duty(guild_id: int, duty_id: int) -> bool:
@@ -551,6 +592,26 @@ class DutiesSettings:
     panel_channel_id: int = 0
     panel_message_id: int = 0
     ticket_channel_id: int = 0
+    #: The full list in the leadership channel (#706).
+    roster_channel_id: int = 0
+    roster_message_id: int = 0
+    #: The curated list shared with members (#707), and whether it names
+    #: backups as well as primaries.
+    shared_channel_id: int = 0
+    shared_message_id: int = 0
+    shared_backups: bool = True
+
+
+_SETTINGS_COLUMNS = (
+    "panel_channel_id",
+    "panel_message_id",
+    "ticket_channel_id",
+    "roster_channel_id",
+    "roster_message_id",
+    "shared_channel_id",
+    "shared_message_id",
+    "shared_backups",
+)
 
 
 def get_settings(guild_id: int) -> DutiesSettings:
@@ -560,28 +621,30 @@ def get_settings(guild_id: int) -> DutiesSettings:
         ).fetchone()
     if row is None:
         return DutiesSettings(guild_id=guild_id)
-    return DutiesSettings(
-        guild_id=guild_id,
-        panel_channel_id=row["panel_channel_id"],
-        panel_message_id=row["panel_message_id"],
-        ticket_channel_id=row["ticket_channel_id"],
-    )
+    values = {col: row[col] for col in _SETTINGS_COLUMNS}
+    values["shared_backups"] = bool(values["shared_backups"])
+    return DutiesSettings(guild_id=guild_id, **values)
 
 
 def save_settings(settings: DutiesSettings) -> None:
+    cols = ", ".join(_SETTINGS_COLUMNS)
+    marks = ", ".join("?" for _ in _SETTINGS_COLUMNS)
+    updates = ", ".join(f"{col} = excluded.{col}" for col in _SETTINGS_COLUMNS)
     with config._get_conn() as conn:
         conn.execute(
-            "INSERT INTO guild_duties_config "
-            "(guild_id, panel_channel_id, panel_message_id, ticket_channel_id) "
-            "VALUES (?, ?, ?, ?) ON CONFLICT(guild_id) DO UPDATE SET "
-            "panel_channel_id = excluded.panel_channel_id, "
-            "panel_message_id = excluded.panel_message_id, "
-            "ticket_channel_id = excluded.ticket_channel_id",
-            (
-                settings.guild_id,
-                int(settings.panel_channel_id),
-                int(settings.panel_message_id),
-                int(settings.ticket_channel_id),
-            ),
+            f"INSERT INTO guild_duties_config (guild_id, {cols}) VALUES (?, {marks}) "
+            f"ON CONFLICT(guild_id) DO UPDATE SET {updates}",
+            (settings.guild_id, *(int(getattr(settings, col)) for col in _SETTINGS_COLUMNS)),
         )
         conn.commit()
+
+
+def update_settings(guild_id: int, **changes) -> DutiesSettings:
+    """Change some settings and keep the rest. Returns what was saved.
+
+    Every write goes through here rather than building a `DutiesSettings`
+    from scratch, so a screen that only knows about one post can't reset
+    the others to their defaults."""
+    settings = replace(get_settings(guild_id), **changes)
+    save_settings(settings)
+    return settings

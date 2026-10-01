@@ -15,8 +15,11 @@ live, since they change nothing.
 **Screens reuse their message.** A picker becomes the editor it picked
 for, the reminder list becomes the reminder editor and back, so an officer
 works down one message rather than a stack of them. Every screen that
-changes something refreshes the hub behind it and the posted contact
-buttons.
+changes something refreshes the hub behind it and every posted message
+(`duties_posts.refresh_all`).
+
+**The sharing row** (#706, #707) is the hub's third: the full list to the
+leadership channel, a curated list to members, and the contact buttons.
 """
 
 from __future__ import annotations
@@ -33,6 +36,7 @@ import duties_copy as c
 import duties_db
 import duties_health
 import duties_panel
+import duties_posts
 import duties_render as r
 from messages import CANCEL_BACKPEDAL_DEFAULT
 from wizard_registry import OwnedView
@@ -260,9 +264,19 @@ class DutiesHubView(OwnedView):
         self.add_button(
             label(c.BTN_REMINDERS), sec, self._reminders, row=1, disabled=not (live and has)
         )
-        self.add_button(label(c.BTN_CONTACT), sec, self._contact, row=1, disabled=not live)
         self.add_button(label(c.BTN_CATEGORIES), sec, self._categories, row=1, disabled=not live)
-        self.add_pagination_row(page=self.page, page_count=page_count, on_page=self._turn, row=2)
+        self.add_button(
+            label(c.BTN_SHARE_LEADERSHIP),
+            sec,
+            self._share_leadership,
+            row=2,
+            disabled=not (live and has),
+        )
+        self.add_button(
+            label(c.BTN_SHARE_MEMBERS), sec, self._share_members, row=2, disabled=not (live and has)
+        )
+        self.add_button(label(c.BTN_POST_CONTACT), sec, self._contact, row=2, disabled=not live)
+        self.add_pagination_row(page=self.page, page_count=page_count, on_page=self._turn, row=3)
 
     async def _turn(self, inter: discord.Interaction, page: int) -> None:
         self.page = page
@@ -278,7 +292,7 @@ class DutiesHubView(OwnedView):
             pass  # the hub's token ran out; the next /duties shows the change
 
     async def after_change(self) -> None:
-        await duties_panel.refresh_panel(self.bot, self.guild.id)
+        await duties_posts.refresh_all(self.bot, self.guild.id)
         await self.refresh()
 
     async def _pick(self, inter: discord.Interaction, on_pick) -> None:
@@ -432,6 +446,26 @@ class DutiesHubView(OwnedView):
 
     async def _contact(self, inter: discord.Interaction) -> None:
         view = ContactSettingsView(self)
+        await inter.response.send_message(embed=view.render(), view=view, ephemeral=True)
+        view.message = await inter.original_response()
+
+    # ── Sharing ──────────────────────────────────────────────────────────────
+
+    async def _share_leadership(self, inter: discord.Interaction) -> None:
+        """Straight to the leadership channel from `/setup`; a channel picker
+        only when none is set."""
+        cfg = config.get_config(self.guild.id)
+        channel_id = getattr(cfg, "leadership_channel_id", 0) if cfg else 0
+        if not channel_id:
+            view = RosterChannelView(self)
+            await inter.response.send_message(c.ROSTER_PICK_CHANNEL, view=view, ephemeral=True)
+            view.message = await inter.original_response()
+            return
+        await inter.response.defer(ephemeral=True, thinking=True)
+        await inter.followup.send(await share_roster(self, channel_id), ephemeral=True)
+
+    async def _share_members(self, inter: discord.Interaction) -> None:
+        view = ShareMembersView(self)
         await inter.response.send_message(embed=view.render(), view=view, ephemeral=True)
         view.message = await inter.original_response()
 
@@ -848,7 +882,7 @@ class CategoryManagerView(OwnedView):
                 )
                 return
             await self._changed(i, c.CATEGORY_RENAMED.format(old=current.name, name=name))
-            await duties_panel.refresh_panel(self.hub.bot, self.hub.guild.id)
+            await duties_posts.refresh_all(self.hub.bot, self.hub.guild.id)
 
         await inter.response.send_modal(
             CategoryNameModal(c.MODAL_CATEGORY_EDIT, current.name, _save)
@@ -1567,6 +1601,215 @@ class ContactSettingsView(OwnedView):
             pass
 
 
+# ── Sharing the full list (#706) ─────────────────────────────────────────────
+
+
+async def share_roster(hub: DutiesHubView, channel_id: int) -> str:
+    """Post the full list in `channel_id`, replacing any earlier one, and
+    return the line that tells the officer how it went."""
+    message = await duties_posts.post(hub.bot, hub.guild.id, duties_posts.ROSTER, channel_id)
+    channel = f"<#{channel_id}>"
+    if message is None:
+        return c.POST_FAILED.format(channel=channel)
+    return c.ROSTER_SHARED_ACK.format(channel=channel)
+
+
+class RosterChannelView(OwnedView):
+    """Where to share the full list, when `/setup` has no leadership channel."""
+
+    timeout_hint = c.HUB_ROUTE
+
+    def __init__(self, hub: DutiesHubView):
+        super().__init__(timeout=180)
+        self.hub = hub
+        self.owner_id = hub.owner_id
+        self.channel_id = 0
+        self._build()
+
+    def _build(self) -> None:
+        self.clear_items()
+        select = discord.ui.ChannelSelect(
+            placeholder=c.ROSTER_CHANNEL_PH,
+            channel_types=[discord.ChannelType.text],
+            default_values=[discord.Object(id=self.channel_id)] if self.channel_id else [],
+            min_values=0,
+            max_values=1,
+            row=0,
+        )
+
+        async def _picked(inter: discord.Interaction):
+            self.channel_id = select.values[0].id if select.values else 0
+            self._build()
+            await inter.response.edit_message(view=self)
+
+        select.callback = _picked
+        self.add_item(select)
+        self.add_button(
+            c.BTN_SHARE_ROSTER,
+            discord.ButtonStyle.primary,
+            self._share,
+            row=1,
+            disabled=not self.channel_id,
+        )
+
+    async def _share(self, inter: discord.Interaction) -> None:
+        self.stop()
+        await inter.response.defer()
+        content = await share_roster(self.hub, self.channel_id)
+        try:
+            await inter.edit_original_response(content=content, view=None)
+        except discord.HTTPException:
+            pass
+
+
+# ── Sharing a curated list with members (#707) ──────────────────────────────
+
+
+class ShareMembersView(OwnedView):
+    """Which duties members see, whether backups are named, and where.
+
+    The picks are saved when the list is shared, not as they're made, so
+    leaving the screen changes nothing. Past 25 duties the picker pages, and
+    picks on other pages are kept while turning.
+    """
+
+    timeout_hint = c.HUB_ROUTE
+
+    def __init__(self, hub: DutiesHubView):
+        super().__init__(timeout=600)
+        self.hub = hub
+        self.owner_id = hub.owner_id
+        settings = duties_db.get_settings(hub.guild.id)
+        self.duties = duties_db.list_duties(hub.guild.id)
+        self.picked = {x.id for x in self.duties if x.shared}
+        self.backups = settings.shared_backups
+        self.channel_id = settings.shared_channel_id
+        self.page = 0
+
+    def render(self) -> discord.Embed:
+        settings = duties_db.get_settings(self.hub.guild.id)
+        self._build(posted=bool(settings.shared_message_id))
+        return r.share_settings_embed(
+            picked=[x for x in self.duties if x.id in self.picked],
+            backups=self.backups,
+            channel_id=self.channel_id,
+            posted=bool(settings.shared_message_id),
+        )
+
+    def _build(self, *, posted: bool) -> None:
+        self.clear_items()
+        page_count = max(1, -(-len(self.duties) // _PER_PICKER_PAGE))
+        self.page = max(0, min(self.page, page_count - 1))
+        chunk = self.duties[self.page * _PER_PICKER_PAGE : (self.page + 1) * _PER_PICKER_PAGE]
+        options = []
+        for duty in chunk:
+            note = duty.category
+            if duty.paused:
+                note = f"{note}{c.PAUSED_MARK}".strip()
+            options.append(
+                discord.SelectOption(
+                    label=duty.name[:100],
+                    value=str(duty.id),
+                    description=note[:100] or None,
+                    default=duty.id in self.picked,
+                )
+            )
+        if options:
+            picker = discord.ui.Select(
+                placeholder=c.SHARE_PICK_PH,
+                min_values=0,
+                max_values=len(options),
+                options=options,
+                row=0,
+            )
+            picker.callback = self._picks_cb(picker, [x.id for x in chunk])
+            self.add_item(picker)
+
+        show = discord.ui.Select(
+            placeholder=c.SHARE_SHOW_PH,
+            options=[
+                discord.SelectOption(label=c.SHOW_BOTH, value="both", default=self.backups),
+                discord.SelectOption(
+                    label=c.SHOW_PRIMARY, value="primary", default=not self.backups
+                ),
+            ],
+            row=1,
+        )
+
+        async def _show(inter: discord.Interaction):
+            self.backups = show.values[0] == "both"
+            await inter.response.edit_message(embed=self.render(), view=self)
+
+        show.callback = _show
+        self.add_item(show)
+
+        channel = discord.ui.ChannelSelect(
+            placeholder=c.SHARE_CHANNEL_PH,
+            channel_types=[discord.ChannelType.text],
+            default_values=[discord.Object(id=self.channel_id)] if self.channel_id else [],
+            min_values=0,
+            max_values=1,
+            row=2,
+        )
+
+        async def _channel(inter: discord.Interaction):
+            self.channel_id = channel.values[0].id if channel.values else 0
+            await inter.response.edit_message(embed=self.render(), view=self)
+
+        channel.callback = _channel
+        self.add_item(channel)
+
+        self.add_pagination_row(page=self.page, page_count=page_count, on_page=self._turn, row=3)
+        self.add_button(
+            c.BTN_SHARE_AGAIN if posted else c.BTN_SHARE_LIST,
+            discord.ButtonStyle.primary,
+            self._share,
+            row=4,
+        )
+
+    def _picks_cb(self, select: discord.ui.Select, on_page: list[int]):
+        async def _cb(inter: discord.Interaction):
+            # Only this page's duties are in the select; the others keep
+            # whatever was picked for them.
+            self.picked -= set(on_page)
+            self.picked |= {int(v) for v in select.values}
+            await inter.response.edit_message(embed=self.render(), view=self)
+
+        return _cb
+
+    async def _turn(self, inter: discord.Interaction, page: int) -> None:
+        self.page = page
+        await inter.response.edit_message(embed=self.render(), view=self)
+
+    async def _share(self, inter: discord.Interaction) -> None:
+        guild_id = self.hub.guild.id
+        if not self.picked:
+            await inter.response.send_message(c.SHARE_NEEDS_DUTY, ephemeral=True)
+            return
+        if not self.channel_id:
+            await inter.response.send_message(c.SHARE_NEEDS_CHANNEL, ephemeral=True)
+            return
+        duties_db.set_shared(guild_id, self.picked)
+        duties_db.update_settings(guild_id, shared_backups=self.backups)
+        await inter.response.defer()
+        message = await duties_posts.post(
+            self.hub.bot, guild_id, duties_posts.SHARED, self.channel_id
+        )
+        channel = f"<#{self.channel_id}>"
+        if message is None:
+            content = c.POST_FAILED.format(channel=channel)
+        else:
+            n = len(self.picked)
+            content = c.SHARE_ACK[0 if n == 1 else 1].format(n=n, channel=channel)
+            paused = [x.name for x in self.duties if x.id in self.picked and x.paused]
+            if paused:
+                content += "\n" + c.SHARE_PAUSED_NOTE.format(names=", ".join(paused))
+        try:
+            await inter.edit_original_response(content=content, embed=self.render(), view=self)
+        except discord.HTTPException:
+            pass
+
+
 # ── Entry point ──────────────────────────────────────────────────────────────
 
 
@@ -1588,7 +1831,7 @@ async def open_hub(bot, interaction: discord.Interaction) -> None:
     await interaction.response.defer(ephemeral=True, thinking=True)
     guild = interaction.guild
     if reconcile_departed(bot, guild):
-        await duties_panel.refresh_panel(bot, guild.id)
+        await duties_posts.refresh_all(bot, guild.id)
     has = bool(duties_db.list_duties(guild.id))
     state = await premium_state(bot, guild.id, has)
     view = DutiesHubView(bot, guild, interaction.user.id, state=state)

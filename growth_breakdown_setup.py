@@ -55,6 +55,7 @@ class _Abort(Exception):
 
 
 TIMEOUT_MSG = WIZARD_TIMEOUT.format(wizard=HUB_BTN_BREAKDOWN)
+ROUTE = wizard_steps.setup_route(HUB_BTN_BREAKDOWN)
 
 
 def _bucket_names(buckets: list[str]) -> str:
@@ -100,7 +101,7 @@ class _Wizard:
     async def ask(self, text: str, view, attr: str, *, timeout_msg: str = TIMEOUT_MSG):
         """Post `text` with `view`, wait, and return `view.<attr>`; a timeout
         (the attribute still `None`) posts the route back and raises."""
-        await self.channel.send(text, view=view)
+        view.message = await self.channel.send(text, view=view)
         await self.wait(view)
         value = getattr(view, attr)
         if value is None:
@@ -402,7 +403,7 @@ async def _ask_tab(w: _Wizard, s: _Saved, a: _Answers) -> None:
         current=s.current.get("tab_breakdown") or "",
         modal_title="Breakdown Tab",
         modal_label="Tab name",
-        timeout_cmd="setup_growth_breakdown",
+        timeout_msg=TIMEOUT_MSG,
         cancel_event=w.cancel_event,
     )
     if tab is None:
@@ -418,7 +419,7 @@ async def _ask_auto_post(w: _Wizard, s: _Saved, a: _Answers) -> None:
         "Each time the bot finishes a snapshot, post the breakdown summary "
         "to a channel so leadership doesn't have to run `/growth breakdown` to see "
         "who's slowing down.",
-        wizard_steps.YesNoView(),
+        wizard_steps.YesNoView(owner_id=w.user.id, timeout_hint=ROUTE),
         "selected",
     )
     if not on:

@@ -28,7 +28,14 @@ import discord
 import premium
 import wizard_registry
 import wizard_steps
-from messages import INPUT_INVALID, SETUP_POINTER_FOOTER, TIER_COMPARISON, WIZARD_TIMEOUT
+from messages import (
+    INPUT_INVALID,
+    NUMBER_PARSE_GIVE_UP,
+    NUMBER_PARSE_RETRY,
+    SETUP_POINTER_FOOTER,
+    TIER_COMPARISON,
+    WIZARD_TIMEOUT,
+)
 from setup_hub import HUB_BTN_GROWTH
 from wizard_registry import wait_view_or_cancel
 from wizard_steps import WIZARD_STEP_TIMEOUT
@@ -48,6 +55,7 @@ class _Abort(Exception):
 
 TIMEOUT_MSG = WIZARD_TIMEOUT.format(wizard=HUB_BTN_GROWTH)
 RECOVERY = f"`/setup` → {HUB_BTN_GROWTH}"
+ROUTE = wizard_steps.setup_route(HUB_BTN_GROWTH)
 
 # Hardcoded defaults — what the bot ships with. These are passed as
 # `default=` to ask_keep_or_change. The user's previously-saved value
@@ -84,9 +92,9 @@ class _Wizard:
         `view.<attr>`; a timeout (the attribute still `None`) posts the
         route back and raises."""
         if embed is not None:
-            await self.channel.send(embed=embed, view=view)
+            view.message = await self.channel.send(embed=embed, view=view)
         else:
-            await self.channel.send(text, view=view)
+            view.message = await self.channel.send(text, view=view)
         await self.wait(view)
         value = getattr(view, attr)
         if value is None:
@@ -98,7 +106,7 @@ class _Wizard:
         """One `ask_keep_or_change` question. The helper posts its own cancel
         and timeout notice; an abandoned one just raises."""
         picked = await wizard_steps.ask_keep_or_change(
-            self.channel, prompt, timeout_cmd="setup_growth", cancel_event=self.cancel_event, **kw
+            self.channel, prompt, timeout_msg=TIMEOUT_MSG, cancel_event=self.cancel_event, **kw
         )
         if picked is None:
             raise _Abort
@@ -327,7 +335,7 @@ async def _ask_enable(w: _Wizard, s: _Saved) -> None:
     enabled = await w.ask(
         "**Step 1 of 7 — Enable growth tracking?**\n"
         "Should the bot automatically take snapshots of your members' stats on a schedule?",
-        wizard_steps.YesNoView(),
+        wizard_steps.YesNoView(owner_id=w.user.id, timeout_hint=ROUTE),
         "selected",
     )
     if enabled:
@@ -487,8 +495,9 @@ async def _ask_growth_tab(w: _Wizard, s: _Saved, a: _Answers) -> None:
 
 async def _ask_frequency(w: _Wizard, s: _Saved, a: _Answers) -> None:
     """Step 7 and 7a: the frequency, then its day or interval. A custom
-    interval is Premium-only; an unparseable day or interval lands the
-    default."""
+    interval is Premium-only. A day or interval that isn't a number is
+    asked again, up to three tries, the way the events wizard's time step
+    retries (#679)."""
     custom_unlocked = await premium.is_premium(
         w.guild_id, interaction=w.interaction, bot=w.interaction.client
     )
@@ -500,30 +509,45 @@ async def _ask_frequency(w: _Wizard, s: _Saved, a: _Answers) -> None:
     )
 
     if a.snapshot_frequency == "monthly":
-        raw = await w.keep_or_change(
+        day = await _ask_number(
+            w,
             "**Step 7a of 7 — Snapshot Day**\n"
             "Which day of the month should the snapshot run? (1–28)",
             default=str(DEFAULT_SNAPSHOT_DAY),
             current=str(s.current.get("snapshot_day") or ""),
             modal_title="Snapshot Day",
             modal_label="Day of month (1–28)",
+            what="a day of the month",
+            hint="a number from `1` to `28`",
         )
-        try:
-            a.snapshot_day = max(1, min(28, int(str(raw).strip())))
-        except ValueError:
-            a.snapshot_day = DEFAULT_SNAPSHOT_DAY
+        a.snapshot_day = max(1, min(28, day))
     else:
-        raw = await w.keep_or_change(
+        interval = await _ask_number(
+            w,
             "**Step 7a of 7 — Interval (days)**\nHow many days between each snapshot?",
             default=str(DEFAULT_SNAPSHOT_INTERVAL),
             current=str(s.current.get("snapshot_interval") or ""),
             modal_title="Interval",
             modal_label="Days between snapshots",
+            what="a number of days",
+            hint="a whole number like `14` or `30`",
         )
+        a.snapshot_interval = max(1, interval)
+
+
+async def _ask_number(w: _Wizard, prompt: str, *, what: str, hint: str, **kw) -> int:
+    """One keep-or-change question whose answer must be a whole number.
+    Asks again on anything else; after three tries, posts the route back
+    and raises."""
+    for attempt in range(3):
+        raw = str(await w.keep_or_change(prompt, **kw)).strip()
         try:
-            a.snapshot_interval = max(1, int(str(raw).strip()))
+            return int(raw)
         except ValueError:
-            a.snapshot_interval = DEFAULT_SNAPSHOT_INTERVAL
+            if attempt < 2:
+                await w.channel.send(NUMBER_PARSE_RETRY.format(raw=raw, what=what, hint=hint))
+    await w.channel.send(NUMBER_PARSE_GIVE_UP.format(recovery=RECOVERY))
+    raise _Abort
 
 
 # ── Save and summary ─────────────────────────────────────────────────────────

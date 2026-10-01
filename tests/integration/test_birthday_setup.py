@@ -286,7 +286,7 @@ class TestFresh:
             current="Birthdays",
             modal_title="Sheet Tab Name",
             modal_label="Tab name",
-            timeout_cmd="setup_birthdays",
+            timeout_msg=TIMEOUT,
             cancel_event=s.cancel_event,
         )
         assert rec.prompt(1) == (

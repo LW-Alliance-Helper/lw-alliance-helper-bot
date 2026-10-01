@@ -26,7 +26,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 import setup_cog  # noqa: F401
 
 from tests.conftest import TEST_GUILD_ID, make_mock_interaction
-from messages import WIZARD_TIMEOUT, INPUT_INVALID, SETUP_POINTER_FOOTER, TIER_COMPARISON
+from messages import (
+    WIZARD_TIMEOUT,
+    INPUT_INVALID,
+    NUMBER_PARSE_GIVE_UP,
+    NUMBER_PARSE_RETRY,
+    SETUP_POINTER_FOOTER,
+    TIER_COMPARISON,
+)
 
 TIMEOUT = WIZARD_TIMEOUT.format(wizard="📈 Growth")
 RECOVERY = "`/setup` → 📈 Growth"
@@ -284,7 +291,7 @@ class TestFresh:
             current="Squad Powers",
             modal_title="Source Tab",
             modal_label="Tab name",
-            timeout_cmd="setup_growth",
+            timeout_msg=TIMEOUT,
             cancel_event=s.cancel_event,
         )
         assert rec.prompt(1) == (
@@ -412,16 +419,16 @@ class TestFresh:
             fields["Snapshot Schedule"] == "Every 14 days" and fields["Name Column"] == "Column B"
         )
 
-    @pytest.mark.parametrize("raw, expected", [("0", 1), ("40", 28), ("abc", 1), ("7", 7)])
+    @pytest.mark.parametrize("raw, expected", [("0", 1), ("40", 28), ("7", 7)])
     @pytest.mark.asyncio
-    async def test_snapshot_day_is_clamped_or_defaulted(self, seeded_db, raw, expected):
+    async def test_snapshot_day_is_clamped(self, seeded_db, raw, expected):
         _save(enabled=0)
         await _drive(MINIMAL, keep=["Squad Powers", "2", "A", "Growth Tracking", raw])
         assert _cfg()["snapshot_day"] == expected
 
-    @pytest.mark.parametrize("raw, expected", [("0", 1), ("x", 30), ("90", 90)])
+    @pytest.mark.parametrize("raw, expected", [("0", 1), ("90", 90)])
     @pytest.mark.asyncio
-    async def test_interval_is_floored_or_defaulted(self, seeded_db, raw, expected):
+    async def test_interval_is_floored(self, seeded_db, raw, expected):
         _save(enabled=0)
         await _drive(
             [("selected", True), ("choice", "done"), ("selected", "interval")],
@@ -429,6 +436,49 @@ class TestFresh:
             is_premium=True,
         )
         assert _cfg()["snapshot_interval"] == expected
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_day_is_asked_again(self, seeded_db):
+        """It used to land the default without a word (#679)."""
+        _save(enabled=0)
+        s, rec, _ = await _drive(
+            MINIMAL, keep=["Squad Powers", "2", "A", "Growth Tracking", "abc", "12"]
+        )
+        assert (
+            NUMBER_PARSE_RETRY.format(
+                raw="abc", what="a day of the month", hint="a number from `1` to `28`"
+            )
+            in s.sent
+        )
+        assert rec.prompt(5) == rec.prompt(4)
+        assert _cfg()["snapshot_day"] == 12
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_interval_is_asked_again(self, seeded_db):
+        _save(enabled=0)
+        s, _, _ = await _drive(
+            [("selected", True), ("choice", "done"), ("selected", "interval")],
+            keep=["Squad Powers", "2", "A", "Growth Tracking", "x", "14"],
+            is_premium=True,
+        )
+        assert (
+            NUMBER_PARSE_RETRY.format(
+                raw="x", what="a number of days", hint="a whole number like `14` or `30`"
+            )
+            in s.sent
+        )
+        assert _cfg()["snapshot_interval"] == 14
+
+    @pytest.mark.asyncio
+    async def test_three_unreadable_answers_end_the_wizard(self, seeded_db):
+        _save(enabled=0, snapshot_day=15)
+        s, rec, _ = await _drive(
+            MINIMAL, keep=["Squad Powers", "2", "A", "Growth Tracking", "a", "b", "c"]
+        )
+        assert len(rec.calls) == 7
+        assert sum(1 for t in s.sent if t and t.startswith("⚠️ Could not read **`")) == 2
+        assert s.sent[-1] == NUMBER_PARSE_GIVE_UP.format(recovery=RECOVERY)
+        assert _cfg()["enabled"] == 0 and _cfg()["snapshot_day"] == 15
 
     @pytest.mark.asyncio
     async def test_next_snapshot_unknown(self, seeded_db):

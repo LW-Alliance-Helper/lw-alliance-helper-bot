@@ -296,7 +296,7 @@ class TestFresh:
             current="9:00am",
             modal_title="Post Time",
             modal_label="Time",
-            timeout_cmd="setup_shiny_tasks",
+            timeout_msg=TIMEOUT,
             cancel_event=s.cancel_event,
         )
         assert rec.prompt(1) == (
@@ -531,13 +531,14 @@ class TestExits:
         assert len(rec.calls) == 2 and not _has()
 
     @pytest.mark.asyncio
-    async def test_review_cancel_and_timeout_read_the_same(self, seeded_db):
-        """Recorded as it stands: a timed-out review view posts the cancel
-        line, since `not confirmed` covers None as well as False."""
+    async def test_review_cancel_and_timeout_say_which(self, seeded_db):
+        """Cancel posts the cancel line; a timeout posts the timeout line,
+        like every other step (#679)."""
         s, _, _ = await _drive(MINIMAL[:2] + [("confirmed", False)])
         assert s.sent[-1] == CONFIRM_CANCEL and not _has()
         s, _, _ = await _drive(MINIMAL[:2] + ["timeout"])
-        assert s.sent[-1] == CONFIRM_CANCEL and not _has()
+        assert s.sent[-1] == TIMEOUT and not _has()
+        s.assert_never(CONFIRM_CANCEL)
         s, _, _ = await _drive(MINIMAL[:2] + ["cancel"])
         s.assert_never(CONFIRM_CANCEL)
         assert not _has()

@@ -247,6 +247,17 @@ DATE_PARSE_RETRY = "⚠️ `{raw}` isn't a date I can parse. Try {examples}. Let
 # how to re-enter. Caller passes the recovery hint as {recovery}.
 DATE_PARSE_GIVE_UP = "⚠️ Could not read that date after a few tries. Run {recovery} to start again."
 
+# Number didn't parse inside a wizard step; the user gets another shot.
+# Same shape as TIME_PARSE_RETRY. Caller passes the user's raw input as
+# {raw}, what the number is as {what} ("a day of the month") and what to
+# type instead as {hint} ("a number from `1` to `28`") (#679).
+NUMBER_PARSE_RETRY = "⚠️ Could not read **`{raw}`** as {what}. Try {hint}. Let's try once more."
+
+# Same but after N failed tries. Caller passes the recovery hint as {recovery}.
+NUMBER_PARSE_GIVE_UP = (
+    "⚠️ Could not read that number after a few tries. Run {recovery} to start again."
+)
+
 
 # ── Support ──────────────────────────────────────────────────────────────────
 

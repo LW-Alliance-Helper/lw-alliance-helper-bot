@@ -371,7 +371,7 @@ class TestFreshDefault:
         assert rec.kw(0)["default"] == "Squad Powers" and rec.kw(0)["current"] == "Squad Powers"
         assert rec.kw(0)["modal_title"] == "Member Statistics Tab"
         assert rec.kw(0)["modal_label"] == "Tab name"
-        assert rec.kw(0)["timeout_cmd"] == "setup_survey"
+        assert rec.kw(0)["timeout_msg"] == TIMEOUT
         assert rec.prompt(1) == (
             "**Step 4 of 6 — Survey History Tab**\n"
             "Which tab should hold the full history of every submission? "
@@ -969,10 +969,12 @@ class TestBuilder:
         assert not config.has_survey_config(G)
 
     @pytest.mark.asyncio
-    async def test_blank_label_on_add_stores_blank(self, seeded_db):
-        """Recorded as it stands: a blank label reply on Add keeps going with
-        an empty label and key (the edit path falls back to the existing one)."""
-        await _drive(
+    async def test_blank_label_on_add_is_asked_again(self, seeded_db):
+        """A blank label on Add is refused and asked again (#679); the edit
+        path still falls back to the existing label."""
+        from survey_setup import LABEL_REQUIRED
+
+        s, _, _ = await _drive(
             [
                 ("intro_choice", "keep"),
                 ("choice", "scratch"),
@@ -980,9 +982,11 @@ class TestBuilder:
                 ("selected", "text"),
             ]
             + BUILDER_FINISH,
-            replies=["   ", "none"],
+            replies=["   ", "Time Zone", "none"],
         )
-        assert _survey()["questions"][0]["label"] == "" and _survey()["questions"][0]["key"] == ""
+        assert LABEL_REQUIRED in s.sent
+        q = _survey()["questions"][0]
+        assert q["label"] == "Time Zone" and q["key"] == "time_zone"
 
 
 # ── Re-entry ─────────────────────────────────────────────────────────────────

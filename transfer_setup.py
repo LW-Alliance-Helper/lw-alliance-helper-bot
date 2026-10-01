@@ -48,6 +48,16 @@ logger = logging.getLogger(__name__)
 _STEP_TIMEOUT = 300
 _TIMEOUT_MSG = "⏰ Timed out. Run `/transfers` → **⚙️ Setup Transfers** to start again."
 
+
+def _route() -> str:
+    """The route back into this wizard, as a prompt's `timeout_hint`.
+    Imported late: `transfers_hub` imports this module."""
+    from messages import ROUTE_HINT
+    from transfers_hub import SETUP_TRANSFERS_BTN
+
+    return ROUTE_HINT.format(cmd="/transfers", btn=SETUP_TRANSFERS_BTN)
+
+
 # Setup-shape modes (stored in `setup_mode`).
 _MODE_SOURCE_TO_OWN = "source_to_own"
 _MODE_OWN = "own"
@@ -1894,8 +1904,8 @@ async def _step_templates(channel, guild_id, owner_id, current, cancel_event):
 async def _step_removal(channel, guild_id, owner_id, cancel_event):
     from wizard_steps import YesNoView
 
-    view = YesNoView()
-    await channel.send(
+    view = YesNoView(owner_id=owner_id, timeout_hint=_route())
+    view.message = await channel.send(
         "**Removal notices?**\n"
         "When someone who'd been marked (Confirmed / Declined / …) is *removed* from your sheet, "
         "want a heads-up? Pending rows that never had a status set never notify.",
@@ -1914,8 +1924,8 @@ async def _step_enrich(channel, guild_id, owner_id, cancel_event):
     """Opt into blank-cell enrichment of existing rows from the source (#9)."""
     from wizard_steps import YesNoView
 
-    view = YesNoView()
-    await channel.send(
+    view = YesNoView(owner_id=owner_id, timeout_hint=_route())
+    view.message = await channel.send(
         "**Fill in missing details from the source?**\n"
         "When someone is *already* on your sheet but missing data the source has (e.g. a blank "
         "power cell), the bot can fill just the **empty** cells from the matching source row on "

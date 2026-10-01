@@ -44,7 +44,7 @@ import discord
 import wizard_registry
 import wizard_steps
 import wizard_time
-from wizard_registry import wait_view_or_cancel
+from wizard_registry import OwnedView, wait_view_or_cancel
 from messages import GENERIC_CMD_TIMEOUT
 from storm_event_hub import HUB_COMMAND, HUB_BTN_PRESETS, HUB_BTN_RULES
 
@@ -83,6 +83,11 @@ class _Wizard:
         stays clean after `cmd_name` became a `/setup` hub hint (#201)."""
         return "desertstorm" if self.event_type == "DS" else "canyonstorm"
 
+    @property
+    def route(self) -> str:
+        """The route back, as a prompt's `timeout_hint`."""
+        return wizard_steps.route_from_cmd_name(self.cmd_name)
+
     async def wait(self, view) -> None:
         """Wait for `view`, raising `_Abort` if the officer cancelled.
         A timeout is the caller's to interpret: some questions treat it
@@ -95,7 +100,7 @@ class _Wizard:
         """Post `text` with `view`, wait, and return `view.<attr>`. A
         timeout (the attribute still `None`) posts the route back and
         raises `_Abort`."""
-        await self.channel.send(text, view=view)
+        view.message = await self.channel.send(text, view=view)
         await self.wait(view)
         value = getattr(view, attr)
         if value is None:
@@ -111,8 +116,11 @@ class _Wizard:
         is the plain Yes / No view; with one, the Keep current / Switch
         gate, so a re-run never forces a re-pick."""
         if current is None:
-            return bool(await self.ask(text, wizard_steps.YesNoView(), "selected"))
-        gate = wizard_steps._KeepOrFlipYesNoGate(current_value=current)
+            view = wizard_steps.YesNoView(owner_id=self.user.id, timeout_hint=self.route)
+            return bool(await self.ask(text, view, "selected"))
+        gate = wizard_steps._KeepOrFlipYesNoGate(
+            current_value=current, owner_id=self.user.id, timeout_hint=self.route
+        )
         return bool(await self.ask(text, gate, "value"))
 
     async def ask_tab(self, text: str, *, key: str, result: dict, modal_title: str) -> None:
@@ -127,7 +135,7 @@ class _Wizard:
             current=result.get(key, ""),
             modal_title=modal_title,
             modal_label="Tab name",
-            timeout_cmd=self.cmd_name,
+            timeout_msg=GENERIC_CMD_TIMEOUT.format(cmd=self.cmd_name),
             cancel_event=self.cancel_event,
         )
         if picked is None:
@@ -171,13 +179,22 @@ class _Choice:
     modal: Callable[[], _TextModal] | None = None
 
 
-class _ChoiceView(discord.ui.View):
+class _ChoiceView(OwnedView):
     """A row of outcome buttons. `outcome` is the picked choice's name, or
     `None` on timeout or a dismissed modal; `modal` is the submitted modal
-    when the pick opened one."""
+    when the pick opened one. Only the officer running the wizard may pick,
+    and on timeout the prompt names `timeout_hint` (#679)."""
 
-    def __init__(self, choices: list[_Choice], *, timeout: float = 300):
-        super().__init__(timeout=timeout)
+    def __init__(
+        self,
+        choices: list[_Choice],
+        *,
+        owner_id: int,
+        timeout_hint: str | None = None,
+        timeout: float = 300,
+    ):
+        super().__init__(timeout=timeout, timeout_hint=timeout_hint)
+        self.owner_id = owner_id
         self.outcome: str | None = None
         self.modal: _TextModal | None = None
         for choice in choices:
@@ -389,7 +406,11 @@ async def _ask_power_data_source(w: _Wizard, result: dict, d: _PowerDefaults) ->
                 f"power column `B`, matched by `{d.match_letter}`."
             ),
         )
-    picker = _ChoiceView([first, _Choice("✏️ Define my own", "edit", modal=modal)])
+    picker = _ChoiceView(
+        [first, _Choice("✏️ Define my own", "edit", modal=modal)],
+        owner_id=w.user.id,
+        timeout_hint=w.route,
+    )
 
     sync_blurb = (
         f"\n\n_Member Sync is enabled, so we're suggesting tab "
@@ -484,7 +505,7 @@ async def _ask_sub_mode(w: _Wizard, result: dict) -> None:
         "How should subs be tracked when leadership builds a roster?\n"
         "• **Pool**: flat list of subs; any sub can cover any primary no-show.\n"
         "• **Paired**: each primary has a specific sub assigned in advance.",
-        _ChoiceView(choices, timeout=120),
+        _ChoiceView(choices, owner_id=w.user.id, timeout_hint=w.route, timeout=120),
         "outcome",
     )
 
@@ -680,7 +701,7 @@ async def _ask_stale_days(w: _Wizard, result: dict, *, saved_days: int) -> None:
         choices.append(_Choice("✏️ Set days (default: 7)", "edit", modal=modal))
 
     for attempt in range(3):
-        picker = _ChoiceView(choices)
+        picker = _ChoiceView(choices, owner_id=w.user.id, timeout_hint=w.route)
         prompt = (
             "**Stale-Power Threshold (💎 Premium)**\n"
             "How many days old must a member's power value "
@@ -833,7 +854,7 @@ async def _ask_last_updated_source(w: _Wizard, result: dict, d: _PowerDefaults) 
                 modal=modal,
             )
         )
-    picker = _ChoiceView(choices)
+    picker = _ChoiceView(choices, owner_id=w.user.id, timeout_hint=w.route)
 
     outcome = await w.ask(
         "**Last-Updated Source (💎 Premium)**\n"
@@ -979,7 +1000,7 @@ async def _ask_dm_template(
         f"```\n{default_template}\n```"
         f"{custom_block}\n\n"
         f"{question}",
-        _ChoiceView(choices),
+        _ChoiceView(choices, owner_id=w.user.id, timeout_hint=w.route),
         "outcome",
     )
     if outcome == "keep":

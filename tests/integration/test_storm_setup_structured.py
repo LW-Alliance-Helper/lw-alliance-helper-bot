@@ -819,3 +819,39 @@ class TestPresetLibrary:
         assert "`/desertstorm` → **" in script.texts[script.index_of("first Desert Storm preset")]
         assert "`/desertstorm` → **" in script.texts[script.index_of("first Desert Storm rule")]
         assert script.views[8].owner_id == 123456789
+
+
+# ── Owned, expiring choice prompts (#679) ────────────────────────────────────
+
+
+class TestChoiceViewOwnership:
+    @pytest.mark.asyncio
+    async def test_only_the_officer_may_pick_and_a_timeout_names_the_route(self):
+        from messages import DENY_NOT_OWNER
+        from storm_setup_structured import _Choice, _ChoiceView
+
+        hint = "`/setup` → **⚔️ Desert Storm**"
+        view = _ChoiceView([_Choice("A", "a")], owner_id=1, timeout_hint=hint)
+        stranger = MagicMock()
+        stranger.user.id = 2
+        stranger.response.send_message = AsyncMock()
+        assert await view.interaction_check(stranger) is False
+        stranger.response.send_message.assert_awaited_once_with(DENY_NOT_OWNER, ephemeral=True)
+        owner = MagicMock()
+        owner.user.id = 1
+        assert await view.interaction_check(owner) is True
+
+        view.message = MagicMock()
+        with patch("wizard_registry.expire_view_message", new=AsyncMock()) as expire:
+            await view.on_timeout()
+        expire.assert_awaited_once_with(view.message, command_hint=hint)
+
+    @pytest.mark.asyncio
+    async def test_every_prompt_in_the_step_belongs_to_the_officer(self, seeded_db):
+        from wizard_registry import OwnedView
+
+        _, script = await _drive(HAPPY, keep_values=FULL_TABS)
+        owned = [v for v in script.views if isinstance(v, OwnedView)]
+        assert owned and all(v.owner_id == 123456789 for v in owned)
+        routed = [v for v in owned if type(v).__name__ in ("_ChoiceView", "YesNoView")]
+        assert routed and all(v.timeout_hint == "`/setup` → **⚔️ Desert Storm**" for v in routed)

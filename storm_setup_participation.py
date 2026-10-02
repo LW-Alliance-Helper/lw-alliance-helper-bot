@@ -123,6 +123,11 @@ class _Walk:
     def check(self, m) -> bool:
         return m.author == self.user and m.channel == self.channel
 
+    @property
+    def route(self) -> str:
+        """The route back, as a prompt's `timeout_hint`."""
+        return wizard_steps.route_from_cmd_name(self.cmd_name)
+
     async def timed_out(self) -> None:
         await self.channel.send(GENERIC_CMD_TIMEOUT.format(cmd=self.cmd_name))
 
@@ -135,11 +140,12 @@ class _Walk:
     async def ask(self, text: str, view, attr: str):
         """Post `text` with `view`, wait, and return `view.<attr>`; a timeout
         (the attribute still `None`) posts the route back and raises."""
-        await self.channel.send(text, view=view)
+        view.message = await self.channel.send(text, view=view)
         await self.wait(view)
         value = getattr(view, attr)
         if value is None:
-            await self.timed_out()
+            if not wizard_registry.prompt_said_timeout(view):
+                await self.timed_out()
             raise _Abort
         return value
 
@@ -169,7 +175,11 @@ class _Walk:
         """One `ask_keep_or_change` question; the helper posts its own
         cancel / timeout notice, so an abandoned one just raises."""
         picked = await wizard_steps.ask_keep_or_change(
-            self.channel, prompt, timeout_cmd=self.cmd_name, cancel_event=self.cancel_event, **kw
+            self.channel,
+            prompt,
+            timeout_msg=GENERIC_CMD_TIMEOUT.format(cmd=self.cmd_name),
+            cancel_event=self.cancel_event,
+            **kw,
         )
         if picked is None:
             raise _Abort
@@ -830,8 +840,11 @@ async def _ask_yes_no(w: _Walk, prompt: str, *, current: bool | None) -> bool:
     """A yes/no question: the plain view on a fresh setup, the keep-or-flip
     gate when an answer was saved, so a re-run never forces a re-pick."""
     if current is None:
-        return bool(await w.ask(prompt, wizard_steps.YesNoView(), "selected"))
-    gate = wizard_steps._KeepOrFlipYesNoGate(current_value=current)
+        view = wizard_steps.YesNoView(owner_id=w.user.id, timeout_hint=w.route)
+        return bool(await w.ask(prompt, view, "selected"))
+    gate = wizard_steps._KeepOrFlipYesNoGate(
+        current_value=current, owner_id=w.user.id, timeout_hint=w.route
+    )
     return bool(await w.ask(prompt, gate, "value"))
 
 

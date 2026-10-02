@@ -19,10 +19,26 @@ import discord
 
 import wizard_registry
 from config import get_config
-from messages import GENERIC_CMD_TIMEOUT
-from wizard_registry import wait_view_or_cancel
+from messages import ROUTE_HINT
+from wizard_registry import OwnedView, wait_view_or_cancel
 
 WIZARD_STEP_TIMEOUT = 120  # 2 minutes per step
+
+
+def setup_route(button: str) -> str:
+    """The route back into a `/setup` wizard, in the `messages.ROUTE_HINT`
+    shape, for a wizard prompt's `timeout_hint`. `button` is the wizard's
+    `setup_hub.HUB_BTN_*` label."""
+    return ROUTE_HINT.format(cmd="/setup", btn=button)
+
+
+def route_from_cmd_name(cmd_name: str) -> str:
+    """The storm wizards carry their route as `cmd_name`, `setup → <hub
+    button>` (#201), for the `Run /…` timeout line. This is the same route
+    in the `messages.ROUTE_HINT` shape, for a prompt's `timeout_hint`."""
+    cmd, _, button = cmd_name.partition(" → ")
+    return ROUTE_HINT.format(cmd=f"/{cmd}", btn=button) if button else f"`/{cmd}`"
+
 
 # ── Step views ─────────────────────────────────────────────────────────────────
 
@@ -714,7 +730,7 @@ async def ask_keep_or_change(
     default: str,
     modal_title: str,
     modal_label: str,
-    timeout_cmd: str | None = None,
+    timeout_msg: str | None = None,
     cancel_event=None,
     current: str | None = None,
 ) -> str | None:
@@ -738,9 +754,11 @@ async def ask_keep_or_change(
         hardcoded baseline in one click instead of typing it manually.
 
     The button labels include the value so the prompt body never has to
-    repeat it. Returns None on timeout (and posts a timeout message
-    referencing `timeout_cmd` if provided), or on /cancel (silently —
-    the /cancel command itself acks the user).
+    repeat it. Returns None on timeout (and posts `timeout_msg` if
+    provided), or on /cancel (silently — the /cancel command itself acks
+    the user). `timeout_msg` is the calling wizard's own timeout line, so
+    this question times out in the same words as every other question in
+    that wizard (#679).
     """
     has_saved = bool(current)
     has_distinct_current = has_saved and current != default
@@ -825,8 +843,8 @@ async def ask_keep_or_change(
     if view.cancelled:
         return None
     if not view.confirmed:
-        if timeout_cmd:
-            await channel.send(GENERIC_CMD_TIMEOUT.format(cmd=timeout_cmd))
+        if timeout_msg:
+            await channel.send(timeout_msg)
         return None
     return view.value
 
@@ -952,9 +970,14 @@ class ScheduleTypeView(discord.ui.View):
         self.stop()
 
 
-class YesNoView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=120)
+class YesNoView(OwnedView):
+    """Yes / No. Only `owner_id` may answer, and on timeout the prompt
+    loses its buttons and names `timeout_hint` (#679). The caller captures
+    the message (`view.message = await channel.send(...)`) for that."""
+
+    def __init__(self, *, owner_id: int, timeout_hint: str | None = None):
+        super().__init__(timeout=120, timeout_hint=timeout_hint)
+        self.owner_id = owner_id
         self.selected = None
 
     @discord.ui.button(label="Yes", style=discord.ButtonStyle.success)
@@ -979,21 +1002,25 @@ class YesNoView(discord.ui.View):
 # now dropped per Rule G / #167).
 
 
-class _KeepOrFlipYesNoGate(discord.ui.View):
+class _KeepOrFlipYesNoGate(OwnedView):
     """Re-entry gate for a yes/no wizard step that already has a saved
     value. Two buttons: Keep current (success) / Flip (secondary).
-    Sets `self.value` to the resolved bool, or None on timeout."""
+    Sets `self.value` to the resolved bool, or None on timeout. Owned and
+    expiring the way `YesNoView` is."""
 
     def __init__(
         self,
         *,
         current_value: bool,
+        owner_id: int,
+        timeout_hint: str | None = None,
         keep_label_yes: str = "Keep current: Yes",
         keep_label_no: str = "Keep current: No",
         flip_label_yes: str = "↩️ Switch to: Yes",
         flip_label_no: str = "↩️ Switch to: No",
     ):
-        super().__init__(timeout=WIZARD_STEP_TIMEOUT)
+        super().__init__(timeout=WIZARD_STEP_TIMEOUT, timeout_hint=timeout_hint)
+        self.owner_id = owner_id
         self.value: bool | None = None
         self.cancelled = False
 

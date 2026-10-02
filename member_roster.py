@@ -1190,6 +1190,7 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
         YesNoView,
         ask_proceed_with_existing_config,
     )
+    from wizard_steps import setup_route
     from config import has_member_roster_config
 
     guild_id = interaction.guild_id
@@ -1245,16 +1246,16 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
         current=current.get("tab_name", ""),
         modal_title="Roster Tab Name",
         modal_label="Tab name",
-        timeout_cmd="setup_members",
+        timeout_msg=WIZARD_TIMEOUT.format(wizard=HUB_BTN_MEMBERS),
         cancel_event=cancel_event,
     )
     if tab_name is None:
         return
 
     # ── Step 2: Filter to member role only? ───────────────────────────────────
-    filter_view = YesNoView()
+    filter_view = YesNoView(owner_id=user.id, timeout_hint=setup_route(HUB_BTN_MEMBERS))
     role_label = f"<@&{member_role_id}>" if member_role_id else "the configured member role"
-    await channel.send(
+    filter_view.message = await channel.send(
         f"**Step 2 of 3 — Filter by Member Role?**\n"
         f"Should the roster only include members who have {role_label}?\n"
         f"Pick **No** to include every (non-bot) member of the server.",
@@ -1264,13 +1265,14 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
     if filter_view.cancelled:
         return
     if filter_view.selected is None:
-        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_MEMBERS))
+        if not wizard_registry.prompt_said_timeout(filter_view):
+            await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_MEMBERS))
         return
     role_filter_id = member_role_id if filter_view.selected else 0
 
     # ── Step 3: Auto-sync on join/leave/role-change? ──────────────────────────
-    auto_view = YesNoView()
-    await channel.send(
+    auto_view = YesNoView(owner_id=user.id, timeout_hint=setup_route(HUB_BTN_MEMBERS))
+    auto_view.message = await channel.send(
         "**Step 3 of 3 — Auto-Sync?**\n"
         "Should the bot automatically re-sync when members join, leave, or "
         "change roles?\nPick **No** to only sync on `/members sync`.",
@@ -1280,7 +1282,8 @@ async def run_member_roster_setup(interaction: discord.Interaction, bot):
     if auto_view.cancelled:
         return
     if auto_view.selected is None:
-        await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_MEMBERS))
+        if not wizard_registry.prompt_said_timeout(auto_view):
+            await channel.send(WIZARD_TIMEOUT.format(wizard=HUB_BTN_MEMBERS))
         return
     auto_sync = 1 if auto_view.selected else 0
 

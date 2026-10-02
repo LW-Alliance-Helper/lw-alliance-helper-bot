@@ -1589,7 +1589,7 @@ async def run_event_setup(interaction: discord.Interaction, bot):
                 current=draft_time or "",
                 modal_title="Draft Posting Time",
                 modal_label="Time",
-                timeout_cmd="setup_events",
+                timeout_msg=WIZARD_TIMEOUT.format(wizard=HUB_BTN_EVENTS),
                 cancel_event=cancel_event,
             )
             if not draft_time_raw:

@@ -63,6 +63,8 @@ class _Abort(Exception):
 
 TIMEOUT_MSG = WIZARD_TIMEOUT.format(wizard=HUB_BTN_SURVEY)
 RETRY_HINT = "Run `/setup` → 📋 Survey to try again."
+# A question saved with no label had no column header and no prompt (#679).
+LABEL_REQUIRED = "⚠️ A question needs a label. Type one to continue."
 
 _TYPE_PRETTY = {
     "text": "Text",
@@ -747,7 +749,11 @@ async def _ask_label(w: _Wizard, q_num: str, existing: dict) -> str:
         f"**{q_num} — Label**\n"
         f"What is the label for this question? (e.g. `Time Zone`, `Preferred Role`)" + label_extra
     )
-    return (await w.reply(120)) or existing.get("label", "")
+    while True:
+        label = (await w.reply(120)) or existing.get("label", "")
+        if label:
+            return label
+        await w.channel.send(LABEL_REQUIRED)
 
 
 async def _ask_type(w: _Wizard, q_num: str, existing: dict) -> str:
@@ -1139,7 +1145,7 @@ async def _ask_survey_tab(
             current=current,
             modal_title=modal_title,
             modal_label="Tab name",
-            timeout_cmd="setup_survey",
+            timeout_msg=TIMEOUT_MSG,
             cancel_event=cancel_event,
         )
         if tab is None:

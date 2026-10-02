@@ -530,7 +530,7 @@ async def _ask_tab(w: _Wizard, s: _Saved) -> str:
         current=s.current.get("tab_name", ""),
         modal_title="Sheet Tab Name",
         modal_label="Tab name",
-        timeout_cmd=w.cmd_name,
+        timeout_msg=GENERIC_CMD_TIMEOUT.format(cmd=w.cmd_name),
         cancel_event=w.cancel_event,
     )
     if tab_name is None:
@@ -834,7 +834,7 @@ async def _ask_reminder_dm(w: _Wizard, s: _Saved) -> str:
         current=saved_remind_dm,
         modal_title=f"{w.label} Reminder DM",
         modal_label="DM body (max 1000 chars)",
-        timeout_cmd=w.cmd_name,
+        timeout_msg=GENERIC_CMD_TIMEOUT.format(cmd=w.cmd_name),
         cancel_event=w.cancel_event,
     )
     if remind_dm is None:

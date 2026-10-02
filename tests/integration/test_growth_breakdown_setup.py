@@ -319,7 +319,7 @@ class TestFresh:
             current="Growth Breakdown",
             modal_title="Breakdown Tab",
             modal_label="Tab name",
-            timeout_cmd="setup_growth_breakdown",
+            timeout_msg=TIMEOUT,
             cancel_event=s.cancel_event,
         )
         assert env.channel_calls == []

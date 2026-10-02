@@ -50,7 +50,7 @@ class _Abort(Exception):
 
 
 TIMEOUT_MSG = WIZARD_TIMEOUT.format(wizard=HUB_BTN_TRAIN)
-NAV = f"setup → {HUB_BTN_TRAIN}"  # the keep-or-change helper's own timeout hint
+ROUTE = wizard_steps.setup_route(HUB_BTN_TRAIN)
 _DEF_HIST, _DEF_MR, _DEF_DR = "Train History", "Train Member Rules", "Train Day Rules"
 
 
@@ -82,16 +82,21 @@ class _Step:
     async def ask(self, text: str, view, attr: str):
         """Post `text` with `view`, wait, and return `view.<attr>`; a timeout
         (the attribute still `None`) posts the route back and raises."""
-        await self.channel.send(text, view=view)
+        view.message = await self.channel.send(text, view=view)
         await self.wait(view)
         value = getattr(view, attr)
         if value is None:
-            await self.timed_out()
+            if not wizard_registry.prompt_said_timeout(view):
+                await self.timed_out()
             raise _Abort
         return value
 
     async def ask_yes_no(self, text: str) -> bool:
-        return bool(await self.ask(text, wizard_steps.YesNoView(), "selected"))
+        return bool(
+            await self.ask(
+                text, wizard_steps.YesNoView(owner_id=self.user.id, timeout_hint=ROUTE), "selected"
+            )
+        )
 
     async def ask_channel(
         self,
@@ -119,7 +124,7 @@ class _Step:
 
     async def keep_or_change(self, prompt: str, **kw) -> str:
         picked = await wizard_steps.ask_keep_or_change(
-            self.channel, prompt, timeout_cmd=NAV, cancel_event=self.cancel_event, **kw
+            self.channel, prompt, timeout_msg=TIMEOUT_MSG, cancel_event=self.cancel_event, **kw
         )
         if picked is None:
             raise _Abort

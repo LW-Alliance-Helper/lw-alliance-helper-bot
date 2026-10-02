@@ -422,8 +422,7 @@ class TestTrainReminderDailyReset:
 
 class TestBirthdayAutoPopulationGate:
     """The birthday → train auto-population must fire exactly once per
-    day at 22:00 ET (10pm ET == 00:00 server time, matching the
-    alliance's nightly reset). Regression for issue #29: previously
+    day at 22:00 in the alliance's timezone (ET here; #728 covers others). Regression for issue #29: previously
     fired on every Railway redeploy and at 8pm ET (UTC midnight) due
     to a tz-naive `date.today()` rollover gate."""
 

@@ -1630,7 +1630,7 @@ def init_db():
             ("reminder_time", "TEXT DEFAULT '08:00'"),
             # Premium birthday DM body (empty → hardcoded default in train_cog.py)
             ("dm_message", "TEXT DEFAULT ''"),
-            # SQLite-backed dedup for the 22:00 ET train-population fire.
+            # SQLite-backed dedup for the nightly train-population fire.
             # ISO date of the last successful auto-pop. Survives bot
             # restarts and discord.py reconnects, which the prior
             # in-memory `birthday_population_fired` set on the cog did
@@ -5359,7 +5359,7 @@ def save_birthday_config(
 def get_birthday_population_last_fired(guild_id: int) -> str:
     """Return the ISO date the birthday auto-population last fired for
     this guild, or `""` when it hasn't fired yet (or the guild has no
-    birthday config row). Used by the train cog's 22:00 ET scheduler to
+    birthday config row). Used by the train cog's nightly scheduler to
     dedup across bot restarts — the previous in-memory set on the cog
     instance got wiped on every Railway redeploy. See #89."""
     with _get_conn() as conn:

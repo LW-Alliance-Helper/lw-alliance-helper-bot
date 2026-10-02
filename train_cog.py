@@ -336,7 +336,7 @@ class TrainCog(commands.Cog):
         # doesn't trip the "new day, reset reminders_fired" branch.
         self.last_reminder_date = datetime.now(tz=ET).date()
         self.reminders_fired = set()  # train-assignment reminders sent today
-        # `birthday_population_fired` used to dedup the 22:00 ET train
+        # `birthday_population_fired` used to dedup the nightly train
         # auto-pop via an in-memory set. Railway restarts wiped it, so
         # the auto-pop re-fired and spammed conflict messages on every
         # redeploy. Dedup now lives on `guild_birthday_config

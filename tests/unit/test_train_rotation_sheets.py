@@ -505,3 +505,19 @@ def test_history_keeps_its_old_discord_id_column(patched_tab):
     ws = patched_tab["Train History"]
     assert ws.header.count("Discord ID") == 1
     assert ws.rows[2][6] == "111"
+
+
+def test_history_is_kept_in_date_order(patched_tab):
+    """#729: a confirmation for an earlier day lands in its place, not at
+    the bottom, so the tab reads as a dated log."""
+    tr.set_day_status(
+        GID, "Train History", "2026-06-03", member="Alpha", reason="auto", status="posted"
+    )
+    tr.set_day_status(
+        GID, "Train History", "2026-06-01", member="Bravo", reason="auto", status="posted"
+    )
+    tr.write_draft_rows(
+        GID, "Train History", [DraftDay("2026-06-02", 1, tr.RULE_AUTO, "Charlie", "auto")]
+    )
+    dates = [r[0] for r in patched_tab["Train History"].rows[1:]]
+    assert dates == ["2026-06-01", "2026-06-02", "2026-06-03"]

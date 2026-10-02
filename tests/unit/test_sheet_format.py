@@ -1,0 +1,136 @@
+"""The house-style formatting pass for bot-created tabs (#729)."""
+
+from unittest.mock import MagicMock
+
+import pytest
+
+import sheet_format as sf
+
+
+@pytest.fixture(autouse=True)
+def _fresh(monkeypatch):
+    monkeypatch.setattr(sf, "_met", set())
+
+
+def _by_kind(requests, kind):
+    return [r[kind] for r in requests if kind in r]
+
+
+def test_header_is_dark_gray_white_bold_14_wrapped():
+    header, body = _by_kind(sf.format_requests(5, sf.TabSpec()), "repeatCell")[:2]
+    assert header["range"] == {"sheetId": 5, "startRowIndex": 0, "endRowIndex": 1}
+    fmt = header["cell"]["userEnteredFormat"]
+    assert fmt["backgroundColor"] == {"red": 67 / 255, "green": 67 / 255, "blue": 67 / 255}
+    assert fmt["textFormat"] == {
+        "foregroundColor": {"red": 1, "green": 1, "blue": 1},
+        "bold": True,
+        "fontSize": 14,
+    }
+    assert fmt["wrapStrategy"] == "WRAP"
+    # The body runs to the bottom of the sheet: no end row.
+    assert body["range"] == {"sheetId": 5, "startRowIndex": 1}
+    assert body["cell"]["userEnteredFormat"]["textFormat"]["fontSize"] == 14
+    assert body["cell"]["userEnteredFormat"]["horizontalAlignment"] == "LEFT"
+
+
+def test_number_formats_per_column():
+    spec = sf.TabSpec(quantity=(3,), text=(6,), date=(0,), datetime=(4,), time=(5,))
+    formats = {
+        r["range"]["startColumnIndex"]: r["cell"]["userEnteredFormat"]["numberFormat"]
+        for r in _by_kind(sf.format_requests(5, spec), "repeatCell")
+        if "startColumnIndex" in r["range"]
+    }
+    assert formats == {
+        3: {"type": "NUMBER", "pattern": "#,##0"},
+        6: {"type": "TEXT"},
+        0: {"type": "DATE"},
+        4: {"type": "DATE_TIME"},
+        5: {"type": "TIME"},
+    }
+
+
+def test_frozen_header_and_name_column_and_a_whole_sheet_filter():
+    requests = sf.format_requests(5, sf.TabSpec(frozen_columns=2))
+    (props,) = _by_kind(requests, "updateSheetProperties")
+    assert props["properties"]["gridProperties"] == {"frozenRowCount": 1, "frozenColumnCount": 2}
+    (flt,) = _by_kind(requests, "setBasicFilter")
+    assert flt["filter"]["range"] == {"sheetId": 5}
+
+
+def test_header_is_styled():
+    def body(*cells):
+        return {"sheets": [{"data": [{"rowData": [{"values": list(cells)}]}]}]}
+
+    plain = {"userEnteredFormat": {"backgroundColor": {"red": 1, "green": 1, "blue": 1}}}
+    filled = {"userEnteredFormat": {"backgroundColor": {"red": 0.8, "green": 1, "blue": 1}}}
+    bold = {"userEnteredFormat": {"textFormat": {"bold": True}}}
+    assert sf.header_is_styled(body(plain, {})) is False
+    assert sf.header_is_styled(body(plain, filled)) is True
+    assert sf.header_is_styled(body(bold)) is True
+    assert sf.header_is_styled({"sheets": [{"data": [{}]}]}) is False
+
+
+def _sheet(marked=(), header_body=None):
+    sh = MagicMock()
+    sh.id = "abc"
+    meta = [
+        {"developerMetadata": {"metadataKey": sf.MARK_KEY, "location": {"sheetId": s}}}
+        for s in marked
+    ]
+    sh.client.request.return_value.json.return_value = {"matchedDeveloperMetadata": meta}
+    sh.fetch_sheet_metadata.return_value = header_body or {}
+    ws = MagicMock()
+    ws.id = 5
+    ws.title = "Train History"
+    return sh, ws
+
+
+def test_a_new_tab_is_formatted_and_marked_once():
+    sh, ws = _sheet()
+    assert sf.ensure_formatted(ws, sf.TabSpec(), sh=sh) is True
+    requests = sh.batch_update.call_args.args[0]["requests"]
+    assert _by_kind(requests, "setBasicFilter")
+    (mark,) = _by_kind(requests, "createDeveloperMetadata")
+    assert mark["developerMetadata"]["location"] == {"sheetId": 5}
+    # The same process never searches again.
+    assert sf.ensure_formatted(ws, sf.TabSpec(), sh=sh) is False
+    assert sh.client.request.call_count == 1
+
+
+def test_a_marked_tab_is_left_alone():
+    sh, ws = _sheet(marked=(5,))
+    assert sf.ensure_formatted(ws, sf.TabSpec(), sh=sh) is False
+    sh.batch_update.assert_not_called()
+
+
+def test_a_tab_someone_styled_is_marked_but_not_formatted():
+    styled = {
+        "sheets": [
+            {
+                "data": [
+                    {
+                        "rowData": [
+                            {"values": [{"userEnteredFormat": {"textFormat": {"bold": True}}}]}
+                        ]
+                    }
+                ]
+            }
+        ]
+    }
+    sh, ws = _sheet(header_body=styled)
+    assert sf.ensure_formatted(ws, sf.TabSpec(), sh=sh) is False
+    requests = sh.batch_update.call_args.args[0]["requests"]
+    assert [list(r) for r in requests] == [["createDeveloperMetadata"]]
+
+
+def test_a_failed_search_formats_nothing():
+    sh, ws = _sheet()
+    sh.client.request.side_effect = RuntimeError("quota")
+    assert sf.ensure_formatted(ws, sf.TabSpec(), sh=sh) is False
+    sh.batch_update.assert_not_called()
+
+
+def test_a_failed_format_does_not_raise():
+    sh, ws = _sheet()
+    sh.batch_update.side_effect = RuntimeError("quota")
+    assert sf.ensure_formatted(ws, sf.TabSpec(), sh=sh) is False

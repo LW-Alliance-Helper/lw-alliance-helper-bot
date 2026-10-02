@@ -1068,6 +1068,18 @@ def load_history(guild_id: int, tab_name: str) -> list[HistoryRow]:
     return out
 
 
+def _by_date(rows: list[list[str]]) -> list[list[str]]:
+    """Train History rows in date order, oldest first (#729): a dated log an
+    officer reads top to bottom. A date the bot can't read (typed by hand in
+    some other shape) keeps its place among the others like it, at the end."""
+
+    def key(row: list[str]):
+        when = _parse_iso(_cell(row, 0))
+        return (0, when) if when else (1, date.min)
+
+    return sorted(rows, key=key)
+
+
 def _history_to_row(h: HistoryRow, id_col: int) -> list[str]:
     row = [h.date, h.member, h.reason, h.status, h.posted_at, h.notes]
     sheet_identity.set_cell(row, id_col, h.discord_id)
@@ -1122,7 +1134,7 @@ def write_draft_rows(guild_id: int, tab_name: str, draft: list[DraftDay]) -> boo
         if dd.date not in posted_dates
     ]
     sheet_identity.fill_ids(kept, name_col=1, id_col=id_col, roster=roster)
-    return _rewrite(ws, HISTORY_HEADER, kept + new_rows, guild_id, tab_name)
+    return _rewrite(ws, HISTORY_HEADER, _by_date(kept + new_rows), guild_id, tab_name)
 
 
 def set_day_status(
@@ -1178,7 +1190,7 @@ def set_day_status(
     if not replaced:
         out.append(new_row)
     sheet_identity.fill_ids(out, name_col=1, id_col=id_col, roster=roster)
-    return _rewrite(ws, HISTORY_HEADER, out, guild_id, tab_name)
+    return _rewrite(ws, HISTORY_HEADER, _by_date(out), guild_id, tab_name)
 
 
 # ── Train Member Rules ───────────────────────────────────────────────────────

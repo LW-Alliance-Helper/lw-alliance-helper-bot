@@ -2109,6 +2109,22 @@ def get_or_create_worksheet(
         return ws
 
 
+def sheet_header_cells(cells: list) -> list[str]:
+    """Row 1 of a tab as the writers must read it: every cell in its own
+    position, blanks included. Only the trailing blanks Sheets pads a short
+    row with are dropped.
+
+    A blank in the middle is a real column, one leadership left untitled.
+    Filtering it out moves every column after it one place left in the
+    bot's eyes, so each row laid out against that header lands one cell
+    off, and the header written back relabels the wrong columns (#732).
+    """
+    out = ["" if c is None else str(c) for c in cells]
+    while out and not out[-1]:
+        out.pop()
+    return out
+
+
 def merge_sheet_header(
     existing: list[str],
     desired: list[str],
@@ -2131,8 +2147,13 @@ def merge_sheet_header(
 
     `pin_last` names a column that must stay rightmost (the survey
     responses tab's "Date Modified"). New columns land before it, which
-    shifts it, so a caller using `pin_last` has to remap existing rows
-    into the returned layout rather than just rewriting row 1.
+    shifts it, so a caller using `pin_last` has to move the stored cells
+    too, not just rewrite row 1. Do that with Sheets' own column insert and
+    move (`survey._reconcile_responses_header`), never by reading the tab
+    and writing it back, which flattens every formula in it (#732).
+
+    `existing` must keep its blank cells in place (`sheet_header_cells`):
+    an untitled column in the middle is still a column.
 
     `legacy_aliases` maps an old header string a tab might still carry to
     the current `desired` label it represents — e.g. a caller whose own

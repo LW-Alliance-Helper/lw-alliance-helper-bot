@@ -253,24 +253,70 @@ def _values_by_column(
     return by_column
 
 
-def _remap_rows_to_header(rows: list[list[str]], header: list[str]) -> list[list[str]]:
-    """Rewrite stored rows into a new column layout, matching by name.
+def _reconcile_responses_header(ws, existing: list, desired: list[str]) -> list[str]:
+    """Give the answers tab the survey's columns, in place, and return its header.
 
-    Used when a tab's header has to change shape. Every value follows its
-    own column, so an answer written under "Drone Level" stays under
-    "Drone Level" wherever that column ends up. Columns the old sheet
-    didn't have come out blank.
+    The tab is shared with leadership: their own columns, notes and
+    formulas sit beside the survey's. So the bot changes it only the way a
+    person would, with Sheets' own column operations. A new question is
+    inserted as a new column just before "Date Modified", and a "Date
+    Modified" found anywhere but the right edge is moved there. Sheets
+    carries every cell with its column and adjusts any formula that
+    points at one. Reading the tab and writing it back instead turned
+    every formula into its value and, past an untitled column, shifted
+    the data one column left (#732).
+
+    The returned header lines up with the sheet's columns, blanks
+    included, so rows can be read and written against it by position.
     """
-    if not rows:
-        return []
-    old_header = [c for c in rows[0] if c]
-    out = [list(header)]
-    for row in rows[1:]:
-        if not any(row):
-            continue
-        by_column = {col: (row[i] if i < len(row) else "") for i, col in enumerate(old_header)}
-        out.append([by_column.get(col, "") for col in header])
-    return out
+    from config import merge_sheet_header, sheet_header_cells
+
+    current = sheet_header_cells(existing)
+    target = merge_sheet_header(
+        current,
+        desired,
+        pin_last=SURVEY_MODIFIED_COLUMN,
+        legacy_aliases=LEGACY_SQUAD_POWER_LABELS,
+    )
+    if target == current:
+        return current
+    if not any(current):
+        ws.update("A1", [target], value_input_option="USER_ENTERED")
+        return target
+
+    pin = SURVEY_MODIFIED_COLUMN
+    if pin in current and current.index(pin) != len(current) - 1:
+        source = current.index(pin)
+        ws.spreadsheet.batch_update(
+            {
+                "requests": [
+                    {
+                        "moveDimension": {
+                            "source": {
+                                "sheetId": ws.id,
+                                "dimension": "COLUMNS",
+                                "startIndex": source,
+                                "endIndex": source + 1,
+                            },
+                            "destinationIndex": len(current),
+                        }
+                    }
+                ]
+            }
+        )
+        current.append(current.pop(source))
+
+    added = [c for c in target if c not in current]
+    if added:
+        at = len(current) - 1 if current[-1] == pin else len(current)
+        ws.insert_cols(
+            [[column] for column in added],
+            col=at + 1,
+            value_input_option="USER_ENTERED",
+            inherit_from_before=at > 0,
+        )
+        current[at:at] = added
+    return current
 
 
 def _owned_cell_ranges(header: list[str], values: dict, row_number: int) -> list[dict]:
@@ -351,8 +397,8 @@ def update_squad_powers(
     from config import (
         get_survey_config,
         get_or_create_worksheet,
-        merge_sheet_header,
         row_for_header,
+        sheet_header_cells,
     )
 
     if survey is None:
@@ -373,24 +419,10 @@ def update_squad_powers(
     now_str = f"{_now.month}/{_now.day}/{_now.year}"
 
     desired, _unused = survey_header_rows(questions)
-    existing_header = rows[0] if rows else []
-    header = merge_sheet_header(
-        existing_header,
-        desired,
-        pin_last=SURVEY_MODIFIED_COLUMN,
-        legacy_aliases=LEGACY_SQUAD_POWER_LABELS,
-    )
-
-    # This tab holds one row per member, so when the columns move it can
-    # afford to be remapped wholesale — which keeps "Date Modified"
-    # rightmost instead of stranding it mid-header. The history tab can't
-    # (it grows without bound), so it only ever gains columns on the right.
-    if header != [c for c in existing_header if c]:
-        rows = _remap_rows_to_header(rows, header)
-        ws.update("A1", rows or [header], value_input_option="USER_ENTERED")
-        if not rows:
-            rows = [header]
-        print(f"[SURVEY] Rebuilt '{tab_name}' header for guild={guild_id} ({len(header)} columns)")
+    before = sheet_header_cells(rows[0] if rows else [])
+    header = _reconcile_responses_header(ws, before, desired)
+    if header != before:
+        print(f"[SURVEY] Updated '{tab_name}' header for guild={guild_id} ({len(header)} columns)")
 
     values = _values_by_column(questions, data, username, discord_id, now_str)
 
@@ -416,6 +448,7 @@ def append_survey_history(
         get_or_create_worksheet,
         merge_sheet_header,
         row_for_header,
+        sheet_header_cells,
     )
 
     if survey is None:
@@ -431,10 +464,10 @@ def append_survey_history(
     ws = get_or_create_worksheet(sh, tab_name)
 
     _unused, desired = survey_header_rows(questions)
-    existing = [c for c in ws.row_values(1) if c]
+    existing = sheet_header_cells(ws.row_values(1))
     header = merge_sheet_header(existing, desired, legacy_aliases=LEGACY_SQUAD_POWER_LABELS)
 
-    if not existing:
+    if not any(existing):
         ws.update("A1", [header], value_input_option="USER_ENTERED")
         try:
             ws.set_basic_filter()

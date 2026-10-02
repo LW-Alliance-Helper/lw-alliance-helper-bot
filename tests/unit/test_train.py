@@ -279,6 +279,31 @@ class TestCheckAndAddBirthdays:
         assert schedule[target.isoformat()]["name"] == "Alice"
         assert alerts == []
 
+    def test_a_member_who_renamed_after_being_placed_is_not_placed_again(self, seeded_db):
+        """#723: Alpha was placed for their birthday, then renamed to Bravo
+        and the birthday list updated. The schedule row's Discord ID says
+        it's the same member, so no second train goes in."""
+        import sheet_identity
+        from train import check_and_add_birthdays
+        from config import save_birthday_config
+
+        today = server_today()
+        target = today + timedelta(days=7)
+        save_birthday_config(TEST_GUILD_ID, "Members", 0, 1, 2, 1, 1, 0, 14)
+
+        existing = {target.isoformat(): {"name": "Alpha", "theme": "Birthday", "discord_id": "111"}}
+        members = [{"name": "Bravo", "month": target.month, "day": target.day}]
+        roster = sheet_identity.build_roster([("111", "Bravo", "")])
+
+        with (
+            patch("train_birthdays.load_birthdays", return_value=members),
+            patch("sheet_identity.load_roster", return_value=roster),
+        ):
+            schedule, alerts = check_and_add_birthdays(existing, guild_id=TEST_GUILD_ID)
+
+        assert len(schedule) == 1
+        assert alerts == []
+
     def test_flexible_placement_uses_adjacent_day(self, seeded_db):
         from train import check_and_add_birthdays
         from config import save_birthday_config

@@ -119,6 +119,17 @@ def load_birthdays(tab_name: str, guild_id: int = None) -> list[dict]:
     try:
         ws = _get_member_sheet_inner(tab_name, guild_id)
         rows = ws.get_all_values()
+        # The configured Discord ID column wins; failing that, the one the
+        # bot keeps on this tab when the alliance asked for it (#723).
+        did_col = bcfg.get("discord_id_col", -1) if bcfg else -1
+        if did_col is None or did_col < 0:
+            did_col = -1
+            if guild_id:
+                import sheet_identity
+
+                did_col = sheet_identity.alliance_tab_column(
+                    ws, rows, guild_id=guild_id, name_col=name_col, first_row=start_row
+                )
         members = []
         for row in rows[start_row - 1 :]:
             if len(row) < min_cols:
@@ -131,10 +142,8 @@ def load_birthdays(tab_name: str, guild_id: int = None) -> list[dict]:
             if parsed:
                 entry = {"name": name, "month": parsed[0], "day": parsed[1]}
                 # Include Discord ID if configured and available
-                if "discord_id_col" in bcfg and bcfg["discord_id_col"] >= 0:
-                    did_col = bcfg["discord_id_col"]
-                    if len(row) > did_col and row[did_col].strip():
-                        entry["discord_id"] = row[did_col].strip()
+                if 0 <= did_col < len(row) and row[did_col].strip():
+                    entry["discord_id"] = row[did_col].strip()
                 members.append(entry)
         print(f"[BIRTHDAY] Loaded {len(members)} members with birthdays from '{tab_name}'")
         if guild_id:
@@ -354,6 +363,9 @@ def check_and_add_birthdays(
     # always rolled over already).
     today = today or server_today()
     check_year = today.year
+    import sheet_identity
+
+    roster = sheet_identity.load_roster(guild_id) if guild_id else sheet_identity.Roster()
     added_count = 0
     # Per-member structured conflict records collected during the loop and
     # returned for the cog to render into one combined interactive alert,
@@ -389,12 +401,17 @@ def check_and_add_birthdays(
         # The window is wider than the ±1-day placement attempt so a manual
         # fix a few days off the birthday (the common leadership workaround)
         # silences the alert instead of letting it re-fire daily.
+        # Matched by Discord ID first, then name (#723), so a member who
+        # renamed after being placed isn't placed a second time.
+        member_id = member.get("discord_id") or roster.id_for(name)
         already_scheduled = False
         for delta in range(-CONFLICT_HANDLED_WINDOW, CONFLICT_HANDLED_WINDOW + 1):
             check_date = (bday + timedelta(days=delta)).isoformat()
             if check_date in schedule:
-                existing_name = schedule[check_date].get("name", "").strip().lower()
-                if existing_name == name.lower():
+                entry = schedule[check_date]
+                if sheet_identity.same_member(
+                    entry.get("name", ""), entry.get("discord_id", ""), name, member_id
+                ):
                     already_scheduled = True
                     break
 
@@ -466,6 +483,7 @@ def check_and_add_birthdays(
             "tone": "",
             "notes": note,
             "prompt_retrieved": False,
+            "discord_id": member_id,
         }
         added_count += 1
 

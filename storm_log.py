@@ -754,6 +754,15 @@ def load_roster_from_config(guild_id: int, event_type: str) -> tuple[list[str], 
         print(f"[LOG] Could not read roster tab `{tab}` for guild {guild_id}: {e}")
         return names, alias_map
 
+    # The alliance's own roster tab carries a Discord ID column when they
+    # asked for one in /setup (#723). Nothing here reads it back: the Member
+    # Log takes each member's ID from the synced roster.
+    import sheet_identity
+
+    sheet_identity.alliance_tab_column(
+        ws, rows, guild_id=guild_id, name_col=name_col, first_row=start_row
+    )
+
     for row in rows[start_row - 1 :]:  # start_row is 1-indexed
         if name_col >= len(row):
             continue
@@ -867,8 +876,27 @@ def upsert_member_log_rows(
             if qk not in header:
                 header.append(qk)
 
+    # Each row carries the member's Discord ID (#723), so a member who
+    # renames between events keeps one record and a re-run finds their row.
+    import sheet_identity
+
+    id_col = sheet_identity.ensure_column(ws, header, guild_id=guild_id, sh=sh)
+    roster = sheet_identity.load_roster(guild_id)
     date_str = _format_member_log_date(log_date)
-    write_members = set(per_member_data.keys())
+    batch_ids = {m: roster.id_for(m) for m in per_member_data}
+    by_id = {identity: m for m, identity in batch_ids.items() if identity}
+    by_name = {m.strip().lower(): m for m in per_member_data}
+
+    def _batch_member(row: list[str]) -> str | None:
+        """The batch member this existing row belongs to: ID, then name."""
+        identity = sheet_identity.cell(row, id_col)
+        if identity in by_id:
+            return by_id[identity]
+        match = by_name.get(row[1].strip().lower())
+        if match is None:
+            return None
+        same = sheet_identity.same_member(row[1], identity, match, batch_ids[match])
+        return match if same else None
 
     # kept = header + every existing data row EXCEPT the ones we're
     # about to rewrite (same date + a member in the write batch).
@@ -883,12 +911,12 @@ def upsert_member_log_rows(
     for row in all_values[1:] if all_values else []:
         if len(row) < 2:
             continue
-        row_date = row[0]
-        row_member = row[1]
-        if row_date == date_str and row_member in write_members:
-            prior.setdefault(row_member, row)
+        member_name = _batch_member(row) if row[0] == date_str else None
+        if member_name is not None:
+            prior.setdefault(member_name, row)
             continue  # Rewritten below, merged with this batch.
         kept.append(row)
+    sheet_identity.fill_ids(kept[1:], name_col=1, id_col=id_col, roster=roster)
 
     # Append the batch's rows. Columns follow the merged header so each
     # value lands in the right cell; a key the batch sets overwrites,
@@ -902,6 +930,8 @@ def upsert_member_log_rows(
                 row.append(str(member_flags[col_name]))
             else:
                 row.append(old[i] if i < len(old) else "")
+        identity = batch_ids[member_name] or sheet_identity.cell(old, id_col)
+        sheet_identity.set_cell(row, id_col, identity)
         kept.append(row)
 
     old_row_count = len(all_values)
@@ -971,6 +1001,14 @@ def read_member_log_window(
     header = all_values[0]
     if len(header) < 2 or header[:2] != ["Event Date", "Member"]:
         return [], {}
+    # Rows are keyed by the member's current roster name when the row
+    # carries their Discord ID (#723), so a rename doesn't split their
+    # history in two.
+    import sheet_identity
+
+    id_col = sheet_identity.locate_column(ws, header, sh=sh)
+    sheet_identity.maybe_stamp(ws, all_values[1:], guild_id=guild_id, name_col=1, id_col=id_col)
+    roster = sheet_identity.load_roster(guild_id) if id_col >= 0 else sheet_identity.Roster()
     # Find the column index for the question_key (if specified) so we
     # can pluck just that value per row.
     col_idx: int | None = None
@@ -1011,6 +1049,7 @@ def read_member_log_window(
         member = r[1]
         if not member:
             continue
+        member = roster.current_name(member, sheet_identity.cell(r, id_col))
         if col_idx is not None:
             val = r[col_idx] if col_idx < len(r) else ""
             rows_by_member.setdefault(member, {})[d] = val
@@ -1019,7 +1058,7 @@ def read_member_log_window(
             cells = {
                 h: (r[i] if i < len(r) else "")
                 for i, h in enumerate(header)
-                if i >= 2  # skip event-date and member cols
+                if i >= 2 and i != id_col  # skip event-date, member and ID cols
             }
             rows_by_member.setdefault(member, {})[d] = cells
     return distinct_dates, rows_by_member

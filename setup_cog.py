@@ -823,6 +823,7 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
         f"**Timezone:** {tz_label}",
         f"**Spreadsheet ID:** {sheet_id_display}",
         f"**Member Tab:** {cfg.tab_member_default}",
+        f"**Discord ID Columns:** {_id_columns_summary(cfg)}",
     ]
     embed.add_field(name="⚙️ Core", value="\n".join(core_lines)[:1024], inline=False)
 
@@ -1025,6 +1026,7 @@ async def run_setup(interaction: discord.Interaction, bot):
                 ("Leadership Channel", f"<#{cfg.leadership_channel_id}>"),
                 ("Timezone", tz_label),
                 ("Sheet ID", sheet_display),
+                ("Discord ID Columns", _id_columns_summary(cfg)),
             ],
             cancel_event=cancel_event,
             no_changes_message="✅ No changes made. Your existing setup is still active.",
@@ -1041,7 +1043,7 @@ async def run_setup(interaction: discord.Interaction, bot):
 
     # ── Step 1: Member role ────────────────────────────────────────────────────
     await channel.send(
-        "**Step 1 of 6 — Member Role**\nSelect the role that all alliance members have:"
+        "**Step 1 of 7 — Member Role**\nSelect the role that all alliance members have:"
     )
     v = RoleSelectStep(
         "Select member role...",
@@ -1066,7 +1068,7 @@ async def run_setup(interaction: discord.Interaction, bot):
 
     # ── Step 2: Leadership role ────────────────────────────────────────────────
     await channel.send(
-        "**Step 2 of 6 — Leadership Role**\nSelect the elevated role for alliance leadership:"
+        "**Step 2 of 7 — Leadership Role**\nSelect the elevated role for alliance leadership:"
     )
     v = RoleSelectStep(
         "Select leadership role...",
@@ -1094,7 +1096,7 @@ async def run_setup(interaction: discord.Interaction, bot):
         guild_id, interaction=interaction, bot=interaction.client
     )
     await channel.send(
-        "**Step 3 of 6 — Leadership Channel**\n"
+        "**Step 3 of 7 — Leadership Channel**\n"
         "Pick the channel where I should post drafts, reminders, and approvals "
         "by default. Individual features (events, train reminders, etc.) can "
         "override this with their own channel later."
@@ -1120,7 +1122,7 @@ async def run_setup(interaction: discord.Interaction, bot):
     # ── Step 4: Timezone ───────────────────────────────────────────────────────
     tz_view = TimezoneSelectView(current=cfg.timezone)
     await channel.send(
-        "**Step 4 of 6 — Timezone**\n"
+        "**Step 4 of 7 — Timezone**\n"
         "Select your alliance's timezone. This is used for displaying event times, "
         "Desert Storm/Canyon Storm times, and train reminders throughout the bot:"
     )
@@ -1135,7 +1137,7 @@ async def run_setup(interaction: discord.Interaction, bot):
 
     # ── Step 5: Google Sheet ID ────────────────────────────────────────────────
     await channel.send(
-        "**Step 5 of 6 — Google Sheet ID**\n"
+        "**Step 5 of 7 — Google Sheet ID**\n"
         "Enter your Google Sheet ID — the long string from your sheet's URL:\n"
         "`https://docs.google.com/spreadsheets/d/`**`YOUR_SHEET_ID`**`/edit`\n"
         "*(You can paste the whole URL and I'll pull the ID out.)*"
@@ -1168,7 +1170,7 @@ async def run_setup(interaction: discord.Interaction, bot):
     sharing_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/edit#sharing"
 
     share_embed = discord.Embed(
-        title="**Step 6 of 6 — Share Your Google Sheet**",
+        title="**Step 6 of 7 — Share Your Google Sheet**",
         description=(
             "Before finishing, you need to give the bot access to your sheet.\n\n"
             "**Follow these steps:**\n"
@@ -1201,6 +1203,39 @@ async def run_setup(interaction: discord.Interaction, bot):
         await channel.send(f"{CANCEL_PLAIN} Run `/setup` to start again.")
         return
 
+    # ── Step 7: Discord ID columns (#723) ──────────────────────────────────────
+    answered = bool(cfg.id_columns_scope)
+    await channel.send(
+        "**Step 7 of 7 — Discord ID Columns**\n"
+        "The tabs I create keep a Discord ID beside each member's name, so a member "
+        "who changes their name keeps one record."
+    )
+    all_tabs = await _ask_core_yes_no(
+        channel,
+        "Do you want the bot to add Discord ID columns to all of your sheets to help "
+        "coordinate your data?\n"
+        "*Yes adds one to the tabs you made too, like your birthday list. "
+        "No keeps them to the tabs I create.*",
+        current=(cfg.id_columns_scope == "all") if answered else None,
+        owner_id=user.id,
+        cancel_event=cancel_event,
+    )
+    if all_tabs is None:
+        return
+    shown = await _ask_core_yes_no(
+        channel,
+        "Do you want to see the Discord ID columns in your sheets?\n"
+        "*No hides them. They keep working, and you can unhide them in Sheets any time.*",
+        current=bool(cfg.id_columns_shown) if answered else None,
+        owner_id=user.id,
+        cancel_event=cancel_event,
+    )
+    if shown is None:
+        return
+    visibility_changed = not answered or bool(cfg.id_columns_shown) != shown
+    cfg.id_columns_scope = "all" if all_tabs else "bot"
+    cfg.id_columns_shown = int(shown)
+
     # ── Confirm and save ───────────────────────────────────────────────────────
     tz_label = TIMEZONE_LABELS.get(cfg.timezone, cfg.timezone)
     embed = discord.Embed(
@@ -1219,6 +1254,7 @@ async def run_setup(interaction: discord.Interaction, bot):
     )
     embed.add_field(name="Timezone", value=tz_label, inline=False)
     embed.add_field(name="Sheet ID", value=f"`{sheet_id[:20]}...`", inline=False)
+    embed.add_field(name="Discord ID Columns", value=_id_columns_summary(cfg), inline=False)
 
     confirm_view = ConfirmView()
     await channel.send(embed=embed, view=confirm_view)
@@ -1232,6 +1268,14 @@ async def run_setup(interaction: discord.Interaction, bot):
     cfg.setup_complete = True
     cfg.spreadsheet_id = sheet_id
     save_config(cfg)
+    if visibility_changed:
+        # Every ID column already in the sheet follows the new answer. Best
+        # effort: a column added later takes the setting either way.
+        import sheet_identity
+
+        await asyncio.to_thread(
+            sheet_identity.apply_visibility, guild_id, shown=bool(cfg.id_columns_shown)
+        )
 
     await channel.send(
         "✅ **Core setup complete!**\n\n"
@@ -1251,6 +1295,35 @@ async def run_setup(interaction: discord.Interaction, bot):
     )
     wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Guild {guild_id} core setup complete")
+
+
+def _id_columns_summary(cfg) -> str:
+    """One line for the Discord ID column answers (#723), unanswered included."""
+    where = "All tabs" if cfg.id_columns_scope == "all" else "Bot tabs only"
+    seen = "shown" if cfg.id_columns_shown else "hidden"
+    return f"{where}, {seen}"
+
+
+async def _ask_core_yes_no(channel, text: str, *, current, owner_id: int, cancel_event):
+    """A yes/no step in the foundations wizard: plain Yes / No the first time,
+    Keep current / Switch once answered. None when cancelled or timed out
+    (the timeout already said so)."""
+    if current is None:
+        view = YesNoView(owner_id=owner_id, timeout_hint="`/setup`")
+        attr = "selected"
+    else:
+        view = _KeepOrFlipYesNoGate(
+            current_value=current, owner_id=owner_id, timeout_hint="`/setup`"
+        )
+        attr = "value"
+    view.message = await channel.send(text, view=view)
+    await wait_view_or_cancel(view, cancel_event)
+    if getattr(view, "cancelled", False):
+        return None
+    value = getattr(view, attr)
+    if value is None and not wizard_registry.prompt_said_timeout(view):
+        await channel.send(GENERIC_CMD_TIMEOUT.format(cmd="setup"))
+    return value
 
 
 # ── Inline-create offers for the structured-flow setup wizard (#144) ─────────

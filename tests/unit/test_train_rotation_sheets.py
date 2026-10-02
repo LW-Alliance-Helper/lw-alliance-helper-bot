@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 import pytest
 
+import sheet_identity
 import train_rotation as tr
 from train_rotation import DayRule, DraftDay, SchedulePreset
 
@@ -26,6 +27,19 @@ def _no_config_health_db(monkeypatch):
     call config_health.clear."""
     monkeypatch.setattr("config_health.record", lambda *a, **kw: None)
     monkeypatch.setattr("config_health.clear", lambda *a, **kw: None)
+
+
+@pytest.fixture(autouse=True)
+def _no_roster(monkeypatch):
+    """No roster and default ID-column settings unless a test says otherwise,
+    so nothing here reaches for a database (#723)."""
+    monkeypatch.setattr("sheet_identity.load_roster", lambda gid: sheet_identity.Roster())
+    monkeypatch.setattr("sheet_identity.settings_for", lambda gid: sheet_identity.Settings())
+
+
+def _roster(*members):
+    """A roster of `(discord_id, name)` pairs, for patching `load_roster`."""
+    return sheet_identity.build_roster([(did, name, "") for did, name in members])
 
 
 class FakeWS:
@@ -44,6 +58,22 @@ class FakeWS:
 
     def update(self, rng, values, value_input_option=None):
         self.rows = [list(self.header)] + [list(r) for r in values]
+
+    def update_cell(self, row, col, value):
+        # Only the header row is written cell by cell (the ID column, #723).
+        assert row == 1
+        self.header.extend([""] * (col - len(self.header)))
+        self.header[col - 1] = value
+        self.rows[0] = list(self.header)
+
+    def batch_update(self, data, value_input_option=None):
+        # Stamping IDs onto rows written before #723: one "<col><row>" per cell.
+        for item in data:
+            ref = item["range"]
+            col = ord(ref[0]) - ord("A")
+            row = self.rows[int(ref[1:]) - 1]
+            row.extend([""] * (col + 1 - len(row)))
+            row[col] = item["values"][0][0]
 
 
 @pytest.fixture
@@ -153,8 +183,7 @@ def test_history_write_draft_and_load_roundtrip(patched_tab):
 def test_history_write_stamps_discord_id_from_roster(patched_tab):
     # The bot resolves the conductor's Discord ID from the roster on write, so
     # the row carries the identity key (name is only the fallback).
-    roster = [{"name": "Alice", "discord_id": "999"}]
-    with patch("train_rotation.load_roster_members", return_value=roster):
+    with patch("sheet_identity.load_roster", return_value=_roster(("999", "Alice"))):
         tr.write_draft_rows(
             GID, "Train History", [DraftDay("2026-06-01", 0, tr.RULE_AUTO, "Alice", "auto")]
         )
@@ -385,3 +414,94 @@ def test_empty_tab_name_returns_none_safely():
     # No patching needed — empty tab short-circuits before any gspread call.
     assert tr.load_history(GID, "") == []
     assert tr.list_presets(GID, "") == []
+
+
+# ── Discord ID first, then name (#723) ───────────────────────────────────────
+
+
+def test_new_member_rules_tab_gets_an_id_column(patched_tab):
+    with patch("sheet_identity.load_roster", return_value=_roster(("111", "Alpha"))):
+        tr.set_member_rule(GID, "Train Member Rules", "Alpha", tr.MEMBER_RULE_OPT_OUT)
+    ws = patched_tab["Train Member Rules"]
+    assert ws.header == ["Member", "Rule Type", "Value", "Notes", "Discord ID"]
+    assert ws.rows[1] == ["Alpha", "opt_out", "", "", "111"]
+
+
+def test_an_opt_out_keeps_applying_after_a_rename(patched_tab):
+    with patch("sheet_identity.load_roster", return_value=_roster(("111", "Alpha"))):
+        tr.set_member_rule(GID, "Train Member Rules", "Alpha", tr.MEMBER_RULE_OPT_OUT)
+    # Alpha renames to Bravo: the row still says Alpha, the ID says who it is.
+    with patch("sheet_identity.load_roster", return_value=_roster(("111", "Bravo"))):
+        rules = tr.load_member_rules(GID, "Train Member Rules")
+    assert [(r.member, r.discord_id) for r in rules] == [("Bravo", "111")]
+    assert tr.is_blocked_by_member_rule("Bravo", rules, date(2026, 10, 1))
+
+
+def test_clearing_a_rule_finds_the_row_under_an_old_name(patched_tab):
+    with patch("sheet_identity.load_roster", return_value=_roster(("111", "Alpha"))):
+        tr.set_member_rule(GID, "Train Member Rules", "Alpha", tr.MEMBER_RULE_OPT_OUT)
+    with patch("sheet_identity.load_roster", return_value=_roster(("111", "Bravo"))):
+        tr.clear_member_rule(GID, "Train Member Rules", "Bravo")
+        assert tr.load_member_rules(GID, "Train Member Rules") == []
+
+
+def test_setting_a_rule_after_a_rename_replaces_the_old_row(patched_tab):
+    with patch("sheet_identity.load_roster", return_value=_roster(("111", "Alpha"))):
+        tr.set_member_rule(
+            GID, "Train Member Rules", "Alpha", tr.MEMBER_RULE_SKIP_UNTIL, "2026-07-01"
+        )
+    with patch("sheet_identity.load_roster", return_value=_roster(("111", "Bravo"))):
+        tr.set_member_rule(
+            GID, "Train Member Rules", "Bravo", tr.MEMBER_RULE_SKIP_UNTIL, "2026-08-01"
+        )
+        rules = tr.load_member_rules(GID, "Train Member Rules")
+    assert [(r.member, r.value) for r in rules] == [("Bravo", "2026-08-01")]
+
+
+def test_a_rule_written_before_ids_gets_one_on_the_next_write(patched_tab):
+    patched_tab["Train Member Rules"] = FakeWS(
+        tr.MEMBER_RULES_HEADER, [["Alpha", "opt_out", "", ""]]
+    )
+    roster = _roster(("111", "Alpha"), ("222", "Charlie"))
+    with patch("sheet_identity.load_roster", return_value=roster):
+        tr.set_member_rule(GID, "Train Member Rules", "Charlie", tr.MEMBER_RULE_OPT_OUT)
+    ws = patched_tab["Train Member Rules"]
+    assert ws.rows[1] == ["Alpha", "opt_out", "", "", "111"]
+    assert ws.rows[2] == ["Charlie", "opt_out", "", "", "222"]
+
+
+def test_a_rule_written_before_ids_is_stamped_when_read(patched_tab, monkeypatch):
+    monkeypatch.setattr(sheet_identity, "_last_stamped", {})
+    patched_tab["Train Member Rules"] = FakeWS(
+        tr.MEMBER_RULES_HEADER + ["Discord ID"], [["Alpha", "opt_out", "", ""]]
+    )
+    with patch("sheet_identity.load_roster", return_value=_roster(("111", "Alpha"))):
+        rules = tr.load_member_rules(GID, "Train Member Rules")
+    assert rules[0].discord_id == "111"
+    assert patched_tab["Train Member Rules"].rows[1][4] == "111"
+
+
+def test_a_specific_member_day_follows_a_rename(patched_tab):
+    preset = SchedulePreset.default("Standard Week")
+    preset.days[4] = DayRule(4, tr.RULE_SPECIFIC, specific_member="Alpha")
+    with patch("sheet_identity.load_roster", return_value=_roster(("111", "Alpha"))):
+        tr.save_preset(GID, "Train Day Rules", preset)
+    with patch("sheet_identity.load_roster", return_value=_roster(("111", "Bravo"))):
+        loaded = tr.load_preset(GID, "Train Day Rules", "Standard Week")
+    assert loaded.days[4].specific_member == "Bravo"
+
+
+def test_history_keeps_its_old_discord_id_column(patched_tab):
+    # A Train History tab from before #723 already has a "Discord ID" seventh
+    # column. It is adopted, not duplicated.
+    patched_tab["Train History"] = FakeWS(
+        tr.HISTORY_HEADER + ["Discord ID"],
+        [["2026-05-01", "Alpha", "auto", "posted", "", "", "111"]],
+    )
+    with patch("sheet_identity.load_roster", return_value=_roster(("111", "Alpha"))):
+        tr.set_day_status(
+            GID, "Train History", "2026-05-02", member="Alpha", reason="auto", status="posted"
+        )
+    ws = patched_tab["Train History"]
+    assert ws.header.count("Discord ID") == 1
+    assert ws.rows[2][6] == "111"

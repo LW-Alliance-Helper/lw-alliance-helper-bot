@@ -162,7 +162,8 @@ class ScheduleUnreadable(Exception):
 def load_schedule(guild_id: int = None, *, strict: bool = False) -> dict:
     """
     Load the full schedule from the Train Schedule sheet.
-    Returns { "YYYY-MM-DD": { name, theme, tone, notes, prompt_retrieved } }
+    Returns { "YYYY-MM-DD": { name, theme, tone, notes, prompt_retrieved,
+    discord_id } }; `discord_id` is the conductor's, "" when the row has none.
 
     A failed read returns `{}`, which is fine for a screen that only shows
     the schedule. A caller that will save the schedule back passes
@@ -171,6 +172,9 @@ def load_schedule(guild_id: int = None, *, strict: bool = False) -> dict:
     try:
         ws = _get_train_sheet(guild_id)
         rows = ws.get_all_values()
+        import sheet_identity
+
+        id_col = sheet_identity.locate_column(ws, rows[0] if rows else [])
         schedule = {}
         for row in rows[1:]:  # skip header row
             if not row or not row[0].strip():
@@ -182,6 +186,7 @@ def load_schedule(guild_id: int = None, *, strict: bool = False) -> dict:
                 "tone": row[3].strip() if len(row) > 3 else "",
                 "notes": row[4].strip() if len(row) > 4 else "",
                 "prompt_retrieved": row[5].strip().upper() == "TRUE" if len(row) > 5 else False,
+                "discord_id": sheet_identity.cell(row, id_col),
             }
         _note_train_sheet_ok(guild_id)
         return schedule
@@ -203,27 +208,37 @@ def save_schedule(schedule: dict, guild_id: int = None):
     Write the full schedule back to the Train Schedule sheet.
     Clears everything below the header and rewrites all rows, so `schedule`
     must be the whole schedule: load it with `load_schedule(strict=True)`.
+
+    Each row carries its conductor's Discord ID (#723): the one it was loaded
+    with, or the roster's for its name when the entry is new or was edited.
     """
     try:
+        import sheet_identity
+
         ws = _get_train_sheet(guild_id)
+        id_col = sheet_identity.ensure_column(ws, ws.row_values(1), guild_id=guild_id)
+        letter = sheet_identity._col_letter(max(6, id_col + 1))
         # Clear all data rows (keep header in row 1)
-        ws.batch_clear(["A2:F1000"])
+        ws.batch_clear([f"A2:{letter}1000"])
 
         if not schedule:
             return
 
+        roster = sheet_identity.load_roster(guild_id)
         rows = []
         for date_str, entry in sorted(schedule.items()):
-            rows.append(
-                [
-                    date_str,
-                    entry.get("name", ""),
-                    entry.get("theme", ""),
-                    entry.get("tone", ""),
-                    entry.get("notes", ""),
-                    "TRUE" if entry.get("prompt_retrieved", False) else "FALSE",
-                ]
-            )
+            name = entry.get("name", "")
+            row = [
+                date_str,
+                name,
+                entry.get("theme", ""),
+                entry.get("tone", ""),
+                entry.get("notes", ""),
+                "TRUE" if entry.get("prompt_retrieved", False) else "FALSE",
+            ]
+            identity = entry.get("discord_id") or roster.id_for(name)
+            sheet_identity.set_cell(row, id_col, identity)
+            rows.append(row)
 
         ws.update("A2", rows, value_input_option="USER_ENTERED")
         print(f"[TRAIN] Schedule saved to sheet ({len(rows)} entries)")

@@ -161,6 +161,9 @@ class TestRunSetup:
             patch("setup_cog.TextInputModal", return_value=sheet_modal),
             patch("setup_cog.ModalLaunchView", return_value=modal_view),
             patch("setup_cog.ConfirmView", side_effect=[share_done, confirm]),
+            # Step 7 (#723): Yes to every tab, No to seeing the columns.
+            patch("setup_cog._ask_core_yes_no", AsyncMock(side_effect=[True, False])) as ask,
+            patch("sheet_identity.apply_visibility", return_value=0) as apply_vis,
         ):
             make_send_handler(interaction.channel)
             await run_setup(interaction, bot)
@@ -171,6 +174,56 @@ class TestRunSetup:
         assert cfg.timezone == "America/New_York"
         assert cfg.spreadsheet_id == "test_sheet_id_abc"
         assert cfg.setup_complete == 1
+        assert cfg.id_columns_scope == "all"
+        assert cfg.id_columns_shown == 0
+        # First answers: no saved value to keep, and the columns already in
+        # the sheet take the answer.
+        assert [c.kwargs["current"] for c in ask.call_args_list] == [None, None]
+        apply_vis.assert_called_once_with(TEST_GUILD_ID, shown=False)
+
+    @pytest.mark.asyncio
+    async def test_rerun_offers_the_saved_id_column_answers(self, seeded_db):
+        """#723: a configured guild re-running /setup sees Keep current for
+        both Discord ID questions, and keeping them touches no columns."""
+        import config
+        from setup_cog import run_setup
+
+        cfg = config.get_config(TEST_GUILD_ID)
+        cfg.setup_complete = True
+        cfg.id_columns_scope = "bot"
+        cfg.id_columns_shown = 1
+        config.save_config(cfg)
+
+        interaction = make_mock_interaction()
+        role = MagicMock(id=1)
+        role.name = "Member"
+        channel = MagicMock(id=2, category_id=None)
+        step = dict(confirmed=True, is_current_stale=False, cancelled=False, wait=AsyncMock())
+        with (
+            patch("setup_cog.RoleSelectStep", return_value=MagicMock(selected_role=role, **step)),
+            patch(
+                "setup_cog.ChannelSelectStep",
+                return_value=MagicMock(selected_channel=channel, **step),
+            ),
+            patch(
+                "setup_cog.TimezoneSelectView",
+                return_value=MagicMock(selected="America/New_York", **step),
+            ),
+            patch("setup_cog.TextInputModal", return_value=MagicMock(value="sheet_xyz")),
+            patch("setup_cog.ModalLaunchView", return_value=MagicMock(**step)),
+            patch("setup_cog.ConfirmView", side_effect=[MagicMock(**step), MagicMock(**step)]),
+            patch("setup_cog._ask_core_yes_no", AsyncMock(side_effect=[False, True])) as ask,
+            patch("sheet_identity.apply_visibility", return_value=0) as apply_vis,
+        ):
+            make_send_handler(
+                interaction.channel, view_overrides={"proceed": True, "cancelled": False}
+            )
+            await run_setup(interaction, AsyncMock())
+
+        assert [c.kwargs["current"] for c in ask.call_args_list] == [False, True]
+        apply_vis.assert_not_called()
+        cfg = config.get_config(TEST_GUILD_ID)
+        assert (cfg.id_columns_scope, cfg.id_columns_shown) == ("bot", 1)
 
     @pytest.mark.asyncio
     async def test_existing_config_shows_summary_and_cancel(self, seeded_db):

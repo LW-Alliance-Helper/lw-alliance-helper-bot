@@ -215,6 +215,8 @@ def collect_core(
         "tab_sitouts": cfg.tab_sitouts,
         "tab_survey_history": cfg.tab_survey_history,
         "tab_member_default": cfg.tab_member_default,
+        "id_columns_scope": cfg.id_columns_scope,
+        "id_columns_shown": int(cfg.id_columns_shown),
     }
 
     channel_fields = [
@@ -1035,11 +1037,14 @@ def apply_import(guild_id: int, parsed: dict, remap: RemapDecisions) -> dict:
                 "tab_sitouts",
                 "tab_survey_history",
                 "tab_member_default",
+                "id_columns_scope",
             ):
                 if field in travels:
                     setattr(cfg, field, travels[field])
             if "event_five_min_warning" in travels:
                 cfg.event_five_min_warning = int(travels["event_five_min_warning"])
+            if "id_columns_shown" in travels:
+                cfg.id_columns_shown = int(travels["id_columns_shown"])
             if remap.spreadsheet_id is not None:
                 cfg.spreadsheet_id = remap.spreadsheet_id
 

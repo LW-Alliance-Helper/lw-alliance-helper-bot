@@ -289,6 +289,26 @@ def roster_identity_map(guild_id: int) -> dict[str, str]:
     the column empty simply get an empty map and stay on name matching.
 
     Never raises — an unreadable or unconfigured roster yields `{}`."""
+    out: dict[str, str] = {}
+    for identity, name, display in _roster_identity_rows(guild_id):
+        # Both spellings map to the same identity: the growth tab may carry
+        # either, depending on which the source tab was pointed at.
+        for candidate in (name, display):
+            if candidate:
+                out.setdefault(candidate.strip().lower(), identity)
+    return out
+
+
+def roster_identity_rows(guild_id: int) -> list[tuple[str, str, str]]:
+    """`(identity, name, display name)` for every roster row with an identity.
+
+    The same rows `roster_identity_map` reads, unflattened, for a caller that
+    also needs the way back from an identity to the member's current name
+    (`sheet_identity`, #723). Never raises; `[]` when the roster is unreadable."""
+    return _roster_identity_rows(guild_id)
+
+
+def _roster_identity_rows(guild_id: int) -> list[tuple[str, str, str]]:
     import config
 
     try:
@@ -296,25 +316,20 @@ def roster_identity_map(guild_id: int) -> dict[str, str]:
         values = config.read_member_roster_values(guild_id, rcfg.get("tab_name") or "Member Roster")
     except Exception as e:
         print(f"[ROSTER] Could not read roster identities for guild {guild_id}: {e}")
-        return {}
+        return []
 
     if not values or len(values) < 2:
-        return {}
+        return []
 
     did_col = int(rcfg.get("discord_id_col", 0))
     name_col = int(rcfg.get("name_col", 1))
     disp_col = int(rcfg.get("display_col", 2))
 
-    out: dict[str, str] = {}
+    out: list[tuple[str, str, str]] = []
     for row in values[1:]:
         identity = _roster_cell(row, did_col)
-        if not identity:
-            continue
-        # Both spellings map to the same identity: the growth tab may carry
-        # either, depending on which the source tab was pointed at.
-        for candidate in (_roster_cell(row, name_col), _roster_cell(row, disp_col)):
-            if candidate:
-                out.setdefault(candidate.strip().lower(), identity)
+        if identity:
+            out.append((identity, _roster_cell(row, name_col), _roster_cell(row, disp_col)))
     return out
 
 

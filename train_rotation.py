@@ -951,9 +951,9 @@ def load_roster_members(guild_id: int) -> list[dict]:
         Display Name, falls back to Name. The IDs power role-scoped day pools
         and rename-proof history.
       - Sync OFF (free / no sync): a hand-maintained roster the alliance
-        pointed us at. We read ONLY the name column — no IDs, no display
-        column — because free tier never needs them (full-roster rotation
-        works on names alone).
+        pointed us at. We read the name column, no display column, plus
+        any Discord IDs officers wrote down themselves
+        (`sheet_identity.free_roster_rows`), so a rename keeps one record.
 
     Returns [] when the config read or the Sheet read fails — callers degrade
     to an empty pool gracefully."""
@@ -996,12 +996,17 @@ def load_roster_members(guild_id: int) -> list[dict]:
                 continue
             out.append({"name": name, "discord_id": _cell(row, id_col)})
     else:
-        # Free name-only pointer: read just the name column, no Discord IDs.
+        # Free pointer: the name column, plus any Discord IDs the alliance
+        # wrote down themselves (#723), read the shared way.
+        ids = {
+            _norm(name): identity
+            for identity, name, _ in sheet_identity.free_roster_rows(rcfg, values)
+        }
         for row in values[1:]:  # row 1 is the header
             name = _cell(row, name_col)
             if not name:
                 continue
-            out.append({"name": name, "discord_id": ""})
+            out.append({"name": name, "discord_id": ids.get(_norm(name), "")})
     return out
 
 

@@ -7,7 +7,8 @@ finds a member's row the same way: by Discord ID first, then by name. This
 module is that one way; no feature keeps its own copy.
 
 - **Where the IDs come from.** The alliance roster (`member_roster`), read
-  once per write. The name being written is current at that moment, so its
+  once per write: the synced roster, or the IDs officers wrote into a roster
+  they keep by hand. The name being written is current at that moment, so its
   roster ID is the right one to store beside it.
 - **Finding the column.** The column carries a `sheet_tags` tag, so the bot
   finds it wherever an officer moves it and whatever they rename it to. A
@@ -33,6 +34,7 @@ back to the name, which is how every tab worked before this.
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
 
@@ -140,20 +142,48 @@ def build_roster(rows: list[tuple[str, str, str]]) -> Roster:
 def load_roster(guild_id: int) -> Roster:
     """The guild's roster identities. Never raises; empty when unreadable.
 
-    Only a synced roster (Premium Member Sync) has Discord IDs to give: a
-    roster the alliance only points the bot at is read for names alone, as
-    `train_rotation.load_roster_members` reads it, because whatever sits in
-    the column the ID setting points at there was never a Discord ID."""
+    A synced roster (Premium Member Sync) gives every identity in its ID
+    column, hand-kept keys for members not on Discord included. A roster the
+    alliance only points the bot at gives the IDs its officers wrote down
+    themselves (`free_roster_rows`)."""
     try:
         import config
         import member_roster
 
-        if not config.get_member_roster_config(guild_id).get("enabled"):
-            return Roster()
-        return build_roster(member_roster.roster_identity_rows(guild_id))
+        rcfg = config.get_member_roster_config(guild_id)
+        if rcfg.get("enabled"):
+            return build_roster(member_roster.roster_identity_rows(guild_id))
+        values = config.read_member_roster_values(guild_id, rcfg.get("tab_name") or "Member Roster")
+        return build_roster(free_roster_rows(rcfg, values))
     except Exception as e:
         print(f"[SHEET IDS] Could not load roster identities for guild {guild_id}: {e}")
         return Roster()
+
+
+_SNOWFLAKE = re.compile(r"^\d{17,20}$")
+
+
+def free_roster_rows(rcfg: dict, values: list[list[str]]) -> list[tuple[str, str, str]]:
+    """`(identity, name, "")` from a roster the alliance keeps by hand.
+
+    Its setup only asks for the name column, so the ID column is the one
+    headed "Discord ID" when there is one, else the configured one unless
+    that is the name column itself. Only a cell shaped like a real Discord
+    ID counts: whatever else sits in a column nobody chose is not one."""
+    if not values or len(values) < 2:
+        return []
+    name_col = int(rcfg.get("name_col", 1))
+    id_col, _untagged = find_column(values[0], None)
+    if id_col < 0:
+        id_col = int(rcfg.get("discord_id_col", 0))
+    if id_col < 0 or id_col == name_col:
+        return []
+    out: list[tuple[str, str, str]] = []
+    for row in values[1:]:
+        identity, name = cell(row, id_col), cell(row, name_col)
+        if name and _SNOWFLAKE.match(identity):
+            out.append((identity, name, ""))
+    return out
 
 
 def same_member(name_a: str, id_a: str, name_b: str, id_b: str) -> bool:

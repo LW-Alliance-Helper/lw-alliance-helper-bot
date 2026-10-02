@@ -1072,8 +1072,10 @@ def write_draft_rows(guild_id: int, tab_name: str, draft: list[DraftDay]) -> boo
 
     Replaces any existing rows whose date falls inside the draft's date set
     (so re-running the draft for the same week overwrites cleanly) and keeps
-    every other row. Days that still need picking are written with an empty
-    member so the draft viewer can render the ⚠️ marker after a restart."""
+    every other row. A `posted` row is the record of who drove that day, so
+    it is never replaced: the draft's day for that date is not written
+    (#720). Days that still need picking are written with an empty member so
+    the draft viewer can render the ⚠️ marker after a restart."""
     ws = _open_tab(guild_id, tab_name, HISTORY_HEADER)
     if ws is None:
         return False
@@ -1085,7 +1087,16 @@ def write_draft_rows(guild_id: int, tab_name: str, draft: list[DraftDay]) -> boo
 
     id_map = roster_id_map(guild_id)
     draft_dates = {dd.date for dd in draft}
-    kept = [row for row in values[1:] if _cell(row, 0) and _cell(row, 0) not in draft_dates]
+
+    def _posted(row) -> bool:
+        return _cell(row, 3).lower() == STATUS_POSTED
+
+    posted_dates = {_cell(row, 0) for row in values[1:] if _posted(row)} & draft_dates
+    kept = [
+        row
+        for row in values[1:]
+        if _cell(row, 0) and (_cell(row, 0) not in draft_dates or _posted(row))
+    ]
     new_rows = [
         _history_to_row(
             HistoryRow(
@@ -1099,6 +1110,7 @@ def write_draft_rows(guild_id: int, tab_name: str, draft: list[DraftDay]) -> boo
             )
         )
         for dd in draft
+        if dd.date not in posted_dates
     ]
     return _rewrite(ws, HISTORY_HEADER, kept + new_rows, guild_id, tab_name)
 

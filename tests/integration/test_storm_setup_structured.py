@@ -251,7 +251,7 @@ class TestGate:
         result, script = await _drive([("selected", False)], current=current)
         assert result["structured_flow_enabled"] is False
         assert result["strategies_tab"] == "Kept"
-        assert "Step 8 of 9" in script.texts[0]
+        assert "Step 7 of 8" in script.texts[0]
         assert "💎 Premium" in script.texts[0]
         assert script.labels(0) == ["Yes", "No"]
         assert len(script.views) == 1
@@ -323,7 +323,7 @@ class TestFullWalk:
             "roster_dm_pool_sub_template": "",
         }
         script.assert_order(
-            "Step 8 of 9",
+            "Step 7 of 8",
             "**Power Data Source**",
             "**Sub Mode**",
             "Sign-Up Channel",

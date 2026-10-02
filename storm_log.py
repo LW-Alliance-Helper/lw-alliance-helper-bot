@@ -803,10 +803,13 @@ def upsert_member_log_rows(
 ) -> None:
     """Upsert one row per (event_date, member) into the Per-Member
     Log tab (#244). Re-running the log (or attendance recording)
-    for the same event date REPLACES the prior rows for the members
+    for the same event date rewrites the prior rows for the members
     in `per_member_data` rather than appending duplicates — without
     this, the Trends Viewer (#246) would double-count flagged events
     on every officer re-run.
+
+    Only the keys in the batch are written: any other column of an
+    existing row for that (date, member) keeps its value (#714).
 
     `per_member_data` maps `{member_name: {question_key: value}}`. A
     member entry with no flags can still be written (every alliance
@@ -868,29 +871,37 @@ def upsert_member_log_rows(
     write_members = set(per_member_data.keys())
 
     # kept = header + every existing data row EXCEPT the ones we're
-    # about to replace (same date + a member in the write batch).
-    # Re-runs of the same event for the same member overwrite cleanly;
-    # other dates and other members are preserved verbatim. Rows for
-    # this date for members NOT in the write batch are also preserved
-    # (e.g. a participation re-log for sit-outs shouldn't drop
-    # attendance rows captured earlier).
+    # about to rewrite (same date + a member in the write batch).
+    # Other dates and other members are preserved verbatim. A rewritten
+    # row starts from the member's existing row for this date, so a
+    # column this batch doesn't carry keeps its value: attendance
+    # (`showed_up` only) and the participation log (its own questions)
+    # both write this date's rows, and each used to blank the other's
+    # answers (#714).
     kept: list[list[str]] = [header]
+    prior: dict[str, list[str]] = {}
     for row in all_values[1:] if all_values else []:
         if len(row) < 2:
             continue
         row_date = row[0]
         row_member = row[1]
         if row_date == date_str and row_member in write_members:
-            continue  # Will be replaced by the new row below.
+            prior.setdefault(row_member, row)
+            continue  # Rewritten below, merged with this batch.
         kept.append(row)
 
-    # Append fresh rows for this batch. Columns follow the merged
-    # header so each value lands in the right cell.
+    # Append the batch's rows. Columns follow the merged header so each
+    # value lands in the right cell; a key the batch sets overwrites,
+    # every other cell comes from the existing row.
     for member_name in sorted(per_member_data.keys()):
         member_flags = per_member_data[member_name] or {}
+        old = prior.get(member_name, [])
         row = [date_str, member_name]
-        for col_name in header[2:]:
-            row.append(str(member_flags.get(col_name, "")))
+        for i, col_name in enumerate(header[2:], start=2):
+            if col_name in member_flags:
+                row.append(str(member_flags[col_name]))
+            else:
+                row.append(old[i] if i < len(old) else "")
         kept.append(row)
 
     old_row_count = len(all_values)

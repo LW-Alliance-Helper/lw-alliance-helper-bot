@@ -447,16 +447,16 @@ class TestNonDiscordRowPreservation:
         assert "Alice" in names
         assert "Eve" in names
 
-    def test_row_with_no_flag_and_no_name_match_still_dropped(self, seeded_db):
-        from member_roster import write_roster
+    def test_row_with_no_flag_and_no_name_match_is_kept_and_marked_no(self, seeded_db):
+        from member_roster import DISCORD_FLAG_COLUMN_HEADER, write_roster
 
         guild = MagicMock()
         guild.id = TEST_GUILD_ID
         guild.members = [_make_member(100, "Alice")]
         # Mystery row with a blank Discord ID, no presence flag, no
-        # legacy flag, and no live name match — preserves the pre-#262
-        # behaviour of dropping unidentifiable rows so a typo doesn't
-        # live forever in the sheet.
+        # legacy flag, and no live name match. #262 dropped it so a typo
+        # wouldn't live forever; #715 keeps it, as the setup preview
+        # promises, and the presence column marks it "No".
         existing = [
             ["Discord ID", "Name", "Display Name", "Joined", "Roles"],
             ["100", "Alice", "Alice", "", ""],
@@ -472,8 +472,9 @@ class TestNonDiscordRowPreservation:
         ):
             write_roster(guild, _default_cfg())
         rows = ws.update.call_args.args[1]
-        names = [r[1] for r in rows[1:]]
-        assert "Mystery" not in names
+        flag_idx = rows[0].index(DISCORD_FLAG_COLUMN_HEADER)
+        mystery = [r for r in rows[1:] if r[1] == "Mystery"]
+        assert len(mystery) == 1 and mystery[0][flag_idx] == "No"
 
     def test_non_discord_row_skips_name_fallback(self, seeded_db):
         from member_roster import write_roster
@@ -1279,7 +1280,7 @@ class TestMergeWithNameFallback:
         new_rows = [
             ["Discord ID", "Name", "Display Name", "Joined", "Roles"],
         ]
-        _merged, report = _merge_with_existing(
+        merged, report = _merge_with_existing(
             new_rows,
             existing,
             self._cfg(),
@@ -1290,6 +1291,8 @@ class TestMergeWithNameFallback:
         # That's ambiguous — bot declines to guess.
         assert "alice" in report["ambiguous"]
         assert report["matched_by_name"] == []
+        # ...and keeps the row, as the setup preview says (#715).
+        assert ["", "Alice", "", "", ""] in merged[1:]
 
     def test_no_match_leaves_row_as_is(self):
         """Existing row's name doesn't match any live guild member —
@@ -1297,8 +1300,8 @@ class TestMergeWithNameFallback:
         from member_roster import _merge_with_existing
 
         existing = [
-            ["Discord ID", "Name", "Display Name", "Joined", "Roles"],
-            ["", "Ghost", "", "", ""],
+            ["Discord ID", "Name", "Display Name", "Joined", "Roles", "Power"],
+            ["", "Ghost", "", "", "", "120M"],
         ]
         guild = self._live_guild_with(
             (1, "alice", "Alice"),
@@ -1314,6 +1317,8 @@ class TestMergeWithNameFallback:
         )
         assert report["no_match"] == ["ghost"]
         assert report["matched_by_name"] == []
+        # The row and its custom column survive (#715).
+        assert ["", "Ghost", "", "", "", "120M"] in _merged[1:]
 
     def test_guild_none_disables_name_fallback(self):
         """Backwards-compat: when no guild is passed, the name-fallback

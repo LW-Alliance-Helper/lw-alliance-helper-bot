@@ -234,7 +234,7 @@ class TestUpsertMemberLogRows:
             ["2026-05-22", "bob", "no"],
         ]
 
-    def test_rerun_preserves_other_questions_for_same_member(self):
+    def test_attendance_after_participation_keeps_the_answers(self):
         """A second question on the same (date, member) — captured in
         a later upsert — replaces only that question's cell, not the
         prior question's value. Sit-out captured first then attendance
@@ -262,19 +262,51 @@ class TestUpsertMemberLogRows:
                 question_keys=["showed_up"],
             )
 
-        # Both questions' columns sit in the header; the new rows
-        # carry the new value AND blank out the old sit-out (because
-        # the second-write batch didn't specify it). That's the
-        # documented behaviour — upsert is a full-row replace per
-        # (date, member). Officers running mixed flows for the same
-        # event need to do all per-member writes in one batch (the
-        # participation flow already does).
+        # Both questions' columns sit in the header, and the sit-out
+        # answers survive the attendance write that didn't carry them.
+        # They used to be blanked (#714).
         payload = ws.update.call_args.args[1]
         assert payload[0] == ["Event Date", "Member", "sat_out", "showed_up"]
-        # Two re-written 2026-05-22 rows. Sit-out column is blank in
-        # the new rows since the second batch didn't supply it.
-        assert ["2026-05-22", "alice", "", "no"] in payload
-        assert ["2026-05-22", "bob", "", "yes"] in payload
+        assert ["2026-05-22", "alice", "yes", "no"] in payload
+        assert ["2026-05-22", "bob", "no", "yes"] in payload
+        assert len(payload) == 3
+
+    def test_participation_after_attendance_keeps_showed_up(self):
+        """The reverse order: a participation re-log after attendance
+        keeps `showed_up`, and an explicit value in the batch still
+        overwrites (#714)."""
+        from storm_log import upsert_member_log_rows
+
+        ws = _make_ws(
+            [
+                ["Event Date", "Member", "sat_out", "showed_up"],
+                ["2026-05-22", "alice", "yes", "no"],
+                ["2026-05-22", "bob", "", "yes"],
+                ["2026-05-15", "bob", "yes", "no"],
+            ]
+        )
+        sh = _make_sh(ws=ws)
+        with patch("storm_log._get_spreadsheet", return_value=sh):
+            upsert_member_log_rows(
+                TEST_GUILD_ID,
+                "DS",
+                date(2026, 5, 22),
+                per_member_data={
+                    "alice": {"sat_out": "no"},
+                    "bob": {"sat_out": "yes"},
+                    "carol": {"sat_out": "no"},
+                },
+                question_keys=["sat_out"],
+            )
+
+        payload = ws.update.call_args.args[1]
+        assert payload == [
+            ["Event Date", "Member", "sat_out", "showed_up"],
+            ["2026-05-15", "bob", "yes", "no"],
+            ["2026-05-22", "alice", "no", "no"],
+            ["2026-05-22", "bob", "yes", "yes"],
+            ["2026-05-22", "carol", "no", ""],
+        ]
 
 
 class TestReadMemberLogWindow:

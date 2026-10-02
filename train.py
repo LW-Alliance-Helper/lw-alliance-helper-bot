@@ -151,10 +151,22 @@ def _get_train_sheet(guild_id: int = None):
     return sh.worksheet(tab)
 
 
-def load_schedule(guild_id: int = None) -> dict:
+class ScheduleUnreadable(Exception):
+    """The Train Schedule tab couldn't be read, so its contents are unknown.
+
+    Raised by `load_schedule(strict=True)`. Every path that saves the schedule
+    loads it this way: `save_schedule` rewrites the whole tab from what it is
+    given, so saving on top of a failed read used to empty the tab (#716)."""
+
+
+def load_schedule(guild_id: int = None, *, strict: bool = False) -> dict:
     """
     Load the full schedule from the Train Schedule sheet.
     Returns { "YYYY-MM-DD": { name, theme, tone, notes, prompt_retrieved } }
+
+    A failed read returns `{}`, which is fine for a screen that only shows
+    the schedule. A caller that will save the schedule back passes
+    `strict=True` and gets `ScheduleUnreadable` instead.
     """
     try:
         ws = _get_train_sheet(guild_id)
@@ -181,13 +193,16 @@ def load_schedule(guild_id: int = None) -> dict:
             f"{describe_sheet_error(e, guild_id=guild_id, tab=_train_tab_name(guild_id))}"
         )
         _note_train_sheet_error(e, guild_id)
+        if strict:
+            raise ScheduleUnreadable(str(e)) from e
         return {}
 
 
 def save_schedule(schedule: dict, guild_id: int = None):
     """
     Write the full schedule back to the Train Schedule sheet.
-    Clears everything below the header and rewrites all rows.
+    Clears everything below the header and rewrites all rows, so `schedule`
+    must be the whole schedule: load it with `load_schedule(strict=True)`.
     """
     try:
         ws = _get_train_sheet(guild_id)

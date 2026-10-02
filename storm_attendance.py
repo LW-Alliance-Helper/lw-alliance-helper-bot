@@ -389,8 +389,9 @@ def save_attendance(
     Status aggregation collapses per-slot rows to one per-member
     `showed_up` value (see `_collapse_slot_statuses_to_member_flag`).
     `prior_existing` is unused after the cutover — the upsert in
-    `storm_log.upsert_member_log_rows` replaces rows for this
-    (event_date, member) cleanly on every save.
+    `storm_log.upsert_member_log_rows` rewrites this (event_date,
+    member)'s `showed_up` on every save and keeps the participation
+    log's answers in the same row (#714).
 
     Returns soft errors (empty on success).
     """

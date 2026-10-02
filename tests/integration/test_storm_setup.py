@@ -167,7 +167,7 @@ async def _drive(
     answers,
     *,
     event_type="DS",
-    keep_values=("DS Assignments", ""),
+    keep_values=("",),
     channel_steps=None,
     participation=None,
     structured=None,
@@ -252,13 +252,13 @@ class TestFreshWalk:
 
         s.assert_order(
             "⚙️ **Desert Storm Setup**",
-            "**Step 2 of 9: Which teams do you run for Desert Storm?**",
-            "**Step 3 of 9: Team Time Slots**",
+            "**Step 1 of 8: Which teams do you run for Desert Storm?**",
+            "**Step 2 of 8: Team Time Slots**",
             "Which time slot does **Team A** run for Desert Storm?",
             "Which time slot does **Team B** run for Desert Storm?",
-            "**Step 4 of 9: Storm Log Channel**",
-            "**Step 5 of 9: Mail Post Channel**",
-            "**Step 6 of 9: Mail Template**",
+            "**Step 3 of 8: Storm Log Channel**",
+            "**Step 4 of 8: Mail Post Channel**",
+            "**Step 5 of 8: Mail Template**",
             "**Desert Storm Mail Template: Team A & B**",
         )
         # Fresh setup: no Keep current anywhere.
@@ -272,6 +272,7 @@ class TestFreshWalk:
         from defaults import DEFAULT_DS_TEMPLATE
 
         row = config.get_storm_config(TEST_GUILD_ID, "DS")
+        # No Sheet Tab step (#717): the saved value is carried as it was.
         assert row["tab_name"] == "DS Assignments"
         assert row["teams"] == "both"
         assert row["post_channel_id"] == 555002
@@ -372,17 +373,17 @@ class TestFreshWalk:
                 ("outcome", "default"),
             ],
             event_type="CS",
-            keep_values=("CS Assignments", ""),
+            keep_values=("",),
         )
         s.assert_order(
             "⚙️ **Canyon Storm Setup**",
             "Which time slot does **Team B** run for Canyon Storm?",
-            "**Step 6 of 9: Mail Template**",
+            "**Step 5 of 8: Mail Template**",
             "**Canyon Storm Mail Template: Team B**",
         )
         s.assert_never("Which time slot does **Team A**")
         s.assert_never("Do you want one template that applies to both teams")
-        assert "`/canyonstorm` → **📄 Generate mail**" in s.texts[s.index_of("Step 5 of 9")]
+        assert "`/canyonstorm` → **📄 Generate mail**" in s.texts[s.index_of("Step 4 of 8")]
 
         # CS rows always persist teams="both" (the strategy editor ignores it).
         row = config.get_storm_config(TEST_GUILD_ID, "CS")
@@ -410,7 +411,7 @@ class TestFreshWalk:
                 ("confirmed", True),
                 ("outcome", "default"),
             ],
-            keep_values=("DS Assignments", "Bring snacks, {name}"),
+            keep_values=("Bring snacks, {name}",),
         )
         assert (
             config.get_storm_config(TEST_GUILD_ID, "DS")["dm_reminder_message"]
@@ -528,7 +529,7 @@ class TestFreshWalk:
                     AsyncMock(return_value=_structured()),
                 ),
                 patch("premium.is_premium", AsyncMock(return_value=True)),
-                patch_keep_or_change(["DS Assignments", ""]),
+                patch_keep_or_change([""]),
             ):
                 await _wizard()(interaction, AsyncMock(), "DS")
         assert [c["include_threads"] for c in calls] == [True, True]
@@ -555,8 +556,8 @@ class TestReentry:
         embed = [e for e in s.embeds if e is not None][0]
         assert embed.title == "⚔️ Current Desert Storm Setup"
         fields = [(f.name, f.value) for f in embed.fields]
-        assert fields[:4] == [
-            ("Sheet Tab", "DS Assignments"),
+        assert ("Sheet Tab", "DS Assignments") not in fields  # no such step (#717)
+        assert fields[:3] == [
             ("Teams", "A only"),
             ("Team Times", f"Team A: {labels[1]}"),
             ("Log Channel", "<#555700>"),
@@ -604,7 +605,7 @@ class TestReentry:
             "Team A only",
             "Team B only",
         ]
-        assert "Current: **Team A only**" in s.texts[s.index_of("Step 2 of 9")]
+        assert "Current: **Team A only**" in s.texts[s.index_of("Step 1 of 8")]
         assert s.labels(2) == [f"Keep current: {labels[1]}", labels[0], labels[1]]
         assert s.labels(5) == [
             "Keep current custom template",
@@ -650,7 +651,7 @@ class TestReentry:
             "One template for both teams",
             "Separate templates per team",
         ]
-        assert "Current: **One shared template**." in s.texts[s.index_of("Step 6 of 9")]
+        assert "Current: **One shared template**." in s.texts[s.index_of("Step 5 of 8")]
         assert config.get_storm_config(TEST_GUILD_ID, "DS_A")["mail_template"] == body
         assert config.get_storm_config(TEST_GUILD_ID, "DS_B")["mail_template"] == body
 
@@ -711,9 +712,9 @@ class TestReentry:
         )
         s.assert_order(
             PREV_CHANNEL_GONE.format(channel_label="Desert Storm log"),
-            "**Step 4 of 9: Storm Log Channel**",
+            "**Step 3 of 8: Storm Log Channel**",
             PREV_CHANNEL_GONE.format(channel_label="Desert Storm mail post"),
-            "**Step 5 of 9: Mail Post Channel**",
+            "**Step 4 of 8: Mail Post Channel**",
         )
 
 
@@ -792,7 +793,7 @@ class TestExits:
                 "setup_cog._run_structured_flow_setup_step", AsyncMock(return_value=_structured())
             ),
             patch("premium.is_premium", AsyncMock(return_value=False)),
-            patch_keep_or_change(["DS Assignments", ""]),
+            patch_keep_or_change([""]),
         ):
             await _wizard()(interaction, bot, "DS")
         assert s.texts[-1] == TIMEOUT
@@ -818,12 +819,15 @@ class TestExits:
         assert not wizard_registry._active.get(123456789)
 
     @pytest.mark.asyncio
-    async def test_tab_step_abort_stops_before_any_prompt(self, seeded_db):
-        import config
-
-        s = await _drive([], keep_values=(None,))
-        assert s.texts == ["⚙️ **Desert Storm Setup**"]
-        assert not config.has_storm_config(TEST_GUILD_ID, "DS")
+    async def test_there_is_no_sheet_tab_step(self, seeded_db):
+        """Its answer was saved and never read, and it suggested the Member
+        Roster tab (#717). The walk opens on the teams question."""
+        s = await _drive(["cancel"], keep_values=())
+        assert s.texts[:2] == [
+            "⚙️ **Desert Storm Setup**",
+            "**Step 1 of 8: Which teams do you run for Desert Storm?**",
+        ]
+        s.assert_never("Sheet Tab")
 
     @pytest.mark.asyncio
     async def test_participation_step_abort_stops_the_walk(self, seeded_db):
@@ -837,7 +841,7 @@ class TestExits:
             patch("setup_cog._run_storm_participation_step", AsyncMock(return_value=None)),
             patch("setup_cog._run_structured_flow_setup_step", AsyncMock()) as structured,
             patch("premium.is_premium", AsyncMock(return_value=False)),
-            patch_keep_or_change(["DS Assignments", ""]),
+            patch_keep_or_change([""]),
         ):
             await _wizard()(interaction, AsyncMock(), "DS")
         structured.assert_not_awaited()

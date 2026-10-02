@@ -258,6 +258,14 @@ NUMBER_PARSE_GIVE_UP = (
     "⚠️ Could not read that number after a few tries. Run {recovery} to start again."
 )
 
+# A change to the train schedule was refused because the tab couldn't be read
+# first: saving on top of a failed read would have emptied it (#716). Caller
+# passes the tab's name as {tab}.
+TRAIN_SCHEDULE_UNREADABLE = (
+    "⚠️ I couldn't read your **{tab}** tab just now, so I didn't change anything. "
+    "Try again in a minute."
+)
+
 
 # ── Support ──────────────────────────────────────────────────────────────────
 

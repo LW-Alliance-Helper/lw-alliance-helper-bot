@@ -107,7 +107,10 @@ class TestTabsInUse:
         claimed = config.tabs_in_use(TEST_GUILD_ID, exclude_survey_id="intake")
         assert "new member intake" not in claimed
 
-    def test_storm_tabs_name_their_event(self, seeded_db):
+    def test_the_unused_storm_tab_name_claims_nothing(self, seeded_db):
+        """The storm config's `tab_name` is read by nothing (#717), so a
+        value saved there (it used to suggest Member Roster) must not make
+        another wizard warn that the tab is taken."""
         import config
 
         with config._get_conn() as conn:
@@ -118,7 +121,7 @@ class TestTabsInUse:
             )
             conn.commit()
 
-        assert "Canyon Storm" in config.tabs_in_use(TEST_GUILD_ID)["cs assignments"]
+        assert "cs assignments" not in config.tabs_in_use(TEST_GUILD_ID)
 
 
 class TestVsTabClaim:

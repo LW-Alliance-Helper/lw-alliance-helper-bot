@@ -470,6 +470,10 @@ def _merge_with_existing(
         column (truthy) are carried forward verbatim after the main
         merge so the storm officer view can still surface them in the
         "Not voted yet" bucket and accept on-behalf votes.
+      * Hand-typed rows with no Discord ID that the name fallback can't
+        place (no live match, or several) are carried forward too, as the
+        setup preview promises; the presence column then marks them "No"
+        (#715).
       * New members joining get blank cells in custom columns; the
         alliance can fill them in.
 
@@ -567,6 +571,12 @@ def _merge_with_existing(
     # picks it up like any other matched row.
     existing_processed: list[list[str]] = []
     existing_by_id: dict[str, list[str]] = {}
+    # Hand-typed rows the name fallback couldn't place (no live match, or
+    # several). The setup preview promises they are "left as-is", so they
+    # are carried forward below, where the presence column marks them "No"
+    # and later syncs keep them as non-Discord rows. They used to be
+    # dropped, custom columns and all (#715, reversing #262's rule).
+    unplaced: list[list[str]] = []
     for raw_row in existing[1:] if existing else []:
         row = list(raw_row)
         if _row_is_non_discord(row):
@@ -604,8 +614,10 @@ def _merge_with_existing(
             report["matched_by_name"].append(candidate_name)
         elif len(matches) > 1:
             report["ambiguous"].append(candidate_name)
+            unplaced.append(row)
         else:
             report["no_match"].append(candidate_name)
+            unplaced.append(row)
         existing_processed.append(row)
 
     merged_rows = [header]
@@ -622,6 +634,13 @@ def _merge_with_existing(
                 if i < len(old):
                     merged[i] = old[i]
         merged_rows.append(merged)
+
+    # Carry forward the rows the name fallback couldn't place, unchanged.
+    for row in unplaced:
+        preserved = list(row)
+        if len(preserved) < width:
+            preserved.extend([""] * (width - len(preserved)))
+        merged_rows.append(preserved)
 
     # Carry forward explicitly-flagged non-Discord rows. The merge loop
     # above only iterates rows pulled from Discord, so without this pass

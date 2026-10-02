@@ -507,7 +507,7 @@ async def _ask_tab(w: _Wizard, s: _Saved, a: _Answers) -> None:
         modal_label="Tab name",
     )
     await _setup().warn_if_tab_claimed(
-        w.channel, w.guild_id, a.tab_name, exclude_field="train_tab_name"
+        w.channel, w.guild_id, a.tab_name, exclude_field="tab_train_schedule"
     )
 
 
@@ -753,7 +753,11 @@ async def _ask_train_dm(w: _Wizard, s: _Saved, a: _Answers) -> None:
 
 
 def _save(w: _Wizard, a: _Answers) -> None:
-    from config import save_train_config
+    from config import save_train_config, update_config_field
+
+    # The tab every train read and write uses (#717). The train config's
+    # own `tab_name` below is kept equal to it.
+    update_config_field(w.guild_id, "tab_train_schedule", a.tab_name)
 
     save_kwargs = dict(
         blurbs_enabled=a.blurbs_enabled,
@@ -828,9 +832,13 @@ async def run_train_setup(interaction: discord.Interaction, bot):
         cancel_event=wizard_registry.register(interaction.user.id),
         guild_tz=guild_cfg.timezone if guild_cfg else "America/New_York",
     )
-    s = _Saved(
-        current=get_train_config(w.guild_id), already_configured=has_train_config(w.guild_id)
-    )
+    current = get_train_config(w.guild_id)
+    # The schedule is read and written through `guild_configs.tab_train_schedule`;
+    # the train config's own `tab_name` was saved by this wizard and read by
+    # nothing, so the step showed and kept a value the bot ignored (#717).
+    # Show the tab the bot really uses, and save the answer there.
+    current["tab_name"] = (guild_cfg.tab_train_schedule if guild_cfg else "") or "Train Schedule"
+    s = _Saved(current=current, already_configured=has_train_config(w.guild_id))
     a = _Answers()
     try:
         await _confirm_reentry(w, s)

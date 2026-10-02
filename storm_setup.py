@@ -154,7 +154,7 @@ class _Answers:
 
 
 class TeamChoiceView(discord.ui.View):
-    """Step 2: which teams the alliance runs. Keep current is the leftmost
+    """Step 1: which teams the alliance runs. Keep current is the leftmost
     button and carries the saved choice on its label; it is removed on a
     fresh setup, where there is nothing to keep."""
 
@@ -206,7 +206,7 @@ class TeamChoiceView(discord.ui.View):
 
 
 class TeamSlotView(discord.ui.View):
-    """Step 3: one team's time slot. The two slot buttons carry the
+    """Step 2: one team's time slot. The two slot buttons carry the
     game-defined labels; Keep current, leftmost, is present only when a
     slot is saved and carries that slot on its label."""
 
@@ -378,7 +378,7 @@ def _load_saved(w: _Wizard) -> _Saved:
         else 0
     )
 
-    # Per-team saved mail templates — drives Step 5 Keep-current (#231).
+    # Per-team saved mail templates — drives Step 4 Keep-current (#231).
     # save_storm_config persists DS_A / DS_B (and CS_A / CS_B) rows per
     # team; the base DS / CS row mirrors whichever side has content. Read
     # the per-team rows directly so the wizard can distinguish "saved
@@ -443,7 +443,6 @@ async def _confirm_reentry(w: _Wizard, s: _Saved) -> None:
         else "❌ Off (preset tabs available on free tier)"
     )
     fields = [
-        ("Sheet Tab", s.current.get("tab_name") or "*not set*"),
         ("Log Channel", f"<#{s.log_channel_id}>" if s.log_channel_id else "*not set*"),
         ("Post Channel", f"<#{s.post_channel_id}>" if s.post_channel_id else "*not set*"),
         ("Timezone", s.tz_label),
@@ -461,11 +460,11 @@ async def _confirm_reentry(w: _Wizard, s: _Saved) -> None:
     # field in the re-entry summary for both event types — officers
     # can see their current single-team / both-teams config.
     _summary_teams = _TEAM_SHORT.get((s.current.get("teams") or "both"), "A & B")
-    fields.insert(1, ("Teams", _summary_teams))
+    fields.insert(0, ("Teams", _summary_teams))
 
     # Team time-slot mapping (#251). Surfaced so officers can see at
     # a glance whether the slots are set, and what they're set to,
-    # without having to re-enter the wizard's Step 3.
+    # without having to re-enter the wizard's Step 2.
     from config import get_storm_slot_labels as _gslot
 
     try:
@@ -487,7 +486,7 @@ async def _confirm_reentry(w: _Wizard, s: _Saved) -> None:
         _times_value = f"Team B: {_slot_blurb(_b_idx)}"
     else:
         _times_value = f"Team A: {_slot_blurb(_a_idx)} · Team B: {_slot_blurb(_b_idx)}"
-    fields.insert(2, ("Team Times", _times_value))
+    fields.insert(1, ("Team Times", _times_value))
     emoji = STORM_GLYPH[w.event_type]
     proceed = await _setup().ask_proceed_with_existing_config(
         w.channel,
@@ -504,45 +503,8 @@ async def _confirm_reentry(w: _Wizard, s: _Saved) -> None:
 # ── The questions ────────────────────────────────────────────────────────────
 
 
-async def _ask_tab(w: _Wizard, s: _Saved) -> str:
-    """Step 1: the Sheet tab."""
-    # When Member Sync is enabled, default to the alliance's Member
-    # Sync tab name (typically "Member Roster") — that's the canonical
-    # roster location for everything else in the bot, so suggesting the
-    # same tab here keeps the alliance's mental model coherent. Falls
-    # back to the legacy `DS Assignments` / `CS Assignments` default
-    # when Member Sync isn't configured yet.
-    from config import get_member_roster_config as _gmrc_step1
-
-    _sync_cfg_step1 = _gmrc_step1(w.guild_id) if w.guild_id else {}
-    if _sync_cfg_step1.get("enabled"):
-        hardcoded_tab = _sync_cfg_step1.get("tab_name") or "Member Roster"
-    else:
-        hardcoded_tab = "DS Assignments" if w.event_type == "DS" else "CS Assignments"
-    tab_name = await wizard_steps.ask_keep_or_change(
-        w.channel,
-        f"**Step 1 of 9: Sheet Tab**\n"
-        f"Which tab in your Google Sheet stores the {w.label} zone assignments?\n"
-        f"⚠️ *Make sure this tab exists in your sheet before continuing.*\n"
-        f"ℹ️ *The bot will manage the data structure of this tab automatically. "
-        f"you don't need to set up any specific columns or formatting beforehand.*",
-        default=hardcoded_tab,
-        current=s.current.get("tab_name", ""),
-        modal_title="Sheet Tab Name",
-        modal_label="Tab name",
-        timeout_msg=GENERIC_CMD_TIMEOUT.format(cmd=w.cmd_name),
-        cancel_event=w.cancel_event,
-    )
-    if tab_name is None:
-        raise _Abort
-    await _setup().warn_if_tab_claimed(
-        w.channel, w.guild_id, tab_name, exclude_field="storm_tab_name"
-    )
-    return tab_name
-
-
 async def _ask_teams(w: _Wizard, s: _Saved) -> str:
-    """Step 2: which teams the alliance runs ('both' / 'A' / 'B')."""
+    """Step 1: which teams the alliance runs ('both' / 'A' / 'B')."""
     saved_teams_raw = (s.current.get("teams") or "both").strip()
     saved_teams = saved_teams_raw if saved_teams_raw in ("both", "A", "B") else "both"
 
@@ -550,7 +512,7 @@ async def _ask_teams(w: _Wizard, s: _Saved) -> str:
     # edited message — otherwise the question disappears the moment a
     # button is clicked and officers scrolling back to review what they
     # answered see only the bare confirmation line.
-    team_prompt = f"**Step 2 of 9: Which teams do you run for {w.label}?**" + (
+    team_prompt = f"**Step 1 of 8: Which teams do you run for {w.label}?**" + (
         f"\nCurrent: **{_TEAM_BLURB[saved_teams]}**" if s.already_configured else ""
     )
     view = TeamChoiceView(
@@ -575,7 +537,7 @@ async def _pick_team_slot(w: _Wizard, team_letter: str, saved_idx, slot_labels: 
 
 
 async def _ask_team_slots(w: _Wizard, s: _Saved, teams: str, a: _Answers) -> None:
-    """Step 3: each run team's time slot (#251), written into `a`."""
+    """Step 2: each run team's time slot (#251), written into `a`."""
     # DS / CS each have two game-defined time slots; this step records
     # which slot each team the alliance runs is on. Both teams can pick
     # the same slot. Independent per event type. The mapping is the
@@ -585,7 +547,7 @@ async def _ask_team_slots(w: _Wizard, s: _Saved, teams: str, a: _Answers) -> Non
 
     a.slot_labels = get_storm_slot_labels(w.event_type, w.guild_id)
     await w.channel.send(
-        f"**Step 3 of 9: Team Time Slots**\n"
+        f"**Step 2 of 8: Team Time Slots**\n"
         f"Select the time when you typically run each {w.label} team. "
         f"You can override these for a single week when you send out the "
         f"sign up, if needed."
@@ -629,7 +591,7 @@ async def _ask_channel(
 
 
 async def _ask_log_channel(w: _Wizard, s: _Saved) -> int:
-    """Step 4: the storm log channel. Reused by /[event]_log lookups and
+    """Step 3: the storm log channel. Reused by /[event]_log lookups and
     by the participation flow when leadership posts the summary."""
     return await _ask_channel(
         w,
@@ -638,14 +600,14 @@ async def _ask_log_channel(w: _Wizard, s: _Saved) -> int:
         current_id=s.log_channel_id,
         gone_label=f"{w.label} log",
         step_text=(
-            f"**Step 4 of 9: Storm Log Channel**\n"
+            f"**Step 3 of 8: Storm Log Channel**\n"
             f"Select the channel where {w.label} participation/log summaries will be posted:"
         ),
     )
 
 
 async def _ask_post_channel(w: _Wizard, s: _Saved) -> int:
-    """Step 5: where 📄 Generate mail posts the final mail."""
+    """Step 4: where 📄 Generate mail posts the final mail."""
     return await _ask_channel(
         w,
         picker_prompt=f"Select the {w.label} mail post channel...",
@@ -653,7 +615,7 @@ async def _ask_post_channel(w: _Wizard, s: _Saved) -> int:
         current_id=s.post_channel_id,
         gone_label=f"{w.label} mail post",
         step_text=(
-            f"**Step 5 of 9: Mail Post Channel**\n"
+            f"**Step 4 of 8: Mail Post Channel**\n"
             f"When leadership clicks **Post & Copy** at the end of "
             f"`/{w.parent_cmd}` → **📄 Generate mail**, the finished mail "
             f"will be posted to this channel:"
@@ -721,14 +683,14 @@ async def _get_template(w: _Wizard, s: _Saved, team_label: str, saved_template: 
 
 
 async def _ask_templates(w: _Wizard, s: _Saved, teams: str) -> tuple[str, str]:
-    """Step 6: the mail template(s). Returns (template_a, template_b);
+    """Step 5: the mail template(s). Returns (template_a, template_b);
     the side of a team the alliance does not run is ''."""
     if teams != "both":
         team_label = "Team A" if teams == "A" else "Team B"
         # Single-team mode — only the saved row for the picked team is
         # relevant; the other side stays empty.
         saved_for_team = s.template_a if teams == "A" else s.template_b
-        await w.channel.send("**Step 6 of 9: Mail Template**")
+        await w.channel.send("**Step 5 of 8: Mail Template**")
         template = await _get_template(w, s, team_label, saved_template=saved_for_team)
         return (template if teams == "A" else ""), (template if teams == "B" else "")
 
@@ -744,7 +706,7 @@ async def _ask_templates(w: _Wizard, s: _Saved, teams: str) -> tuple[str, str]:
 
     shared_view = SharedTemplateView(saved_share_mode=saved_share_mode)
     prompt_lines = [
-        "**Step 6 of 9: Mail Template**",
+        "**Step 5 of 8: Mail Template**",
         "Do you want one template that applies to both teams, or separate templates per team?",
     ]
     if saved_share_mode is not None:
@@ -769,7 +731,7 @@ async def _ask_templates(w: _Wizard, s: _Saved, teams: str) -> tuple[str, str]:
 
 
 async def _ask_participation(w: _Wizard, s: _Saved) -> dict:
-    """Step 7: participation log tracking (optional), its own sub-flow."""
+    """Step 6: participation log tracking (optional), its own sub-flow."""
     cfg = await _setup()._run_storm_participation_step(
         w.channel,
         w.bot,
@@ -788,7 +750,7 @@ async def _ask_participation(w: _Wizard, s: _Saved) -> dict:
 
 
 async def _ask_structured(w: _Wizard, s: _Saved) -> dict:
-    """Step 8: the structured roster flow (#38 + #54), Premium opt-in
+    """Step 7: the structured roster flow (#38 + #54), Premium opt-in
     plus preset tabs, its own sub-flow."""
     cfg = await _setup()._run_structured_flow_setup_step(
         w.channel,
@@ -810,7 +772,7 @@ async def _ask_structured(w: _Wizard, s: _Saved) -> dict:
 
 
 async def _ask_reminder_dm(w: _Wizard, s: _Saved) -> str:
-    """Step 9: the reminder DM body (💎 Premium). Returns '' when the
+    """Step 8: the reminder DM body (💎 Premium). Returns '' when the
     officer keeps the default, so the hardcoded default picks up future
     tweaks without alliances re-running setup."""
     # The body of the DM that fires when leadership clicks
@@ -824,7 +786,7 @@ async def _ask_reminder_dm(w: _Wizard, s: _Saved) -> str:
     saved_remind_dm = (s.current.get("dm_reminder_message") or "").strip()
     remind_dm = await wizard_steps.ask_keep_or_change(
         w.channel,
-        f"**Step 9 of 9: {w.label} Reminder DM (💎 Premium)**\n"
+        f"**Step 8 of 8: {w.label} Reminder DM (💎 Premium)**\n"
         f"When leadership clicks **📨 Send DM reminder to roster** on "
         f"`/{w.parent_cmd}`, the bot DMs every roster member this message. "
         f"Free guilds can configure it now; it just won't fire until "
@@ -855,7 +817,7 @@ def _save(w: _Wizard, s: _Saved, a: _Answers) -> None:
         save_roster_dm_templates,
     )
 
-    # `teams` carries the wizard's Step 2 choice ('both' / 'A' / 'B') so
+    # `teams` carries the wizard's Step 1 choice ('both' / 'A' / 'B') so
     # the strategy preset editor can hide Min Power inputs for a team the
     # alliance doesn't run (#148). CS rows store 'both' and ignore it.
     teams_persisted = a.teams if w.event_type == "DS" else "both"
@@ -956,7 +918,6 @@ def _save(w: _Wizard, s: _Saved, a: _Answers) -> None:
 
 def _summary_embed(w: _Wizard, s: _Saved, a: _Answers) -> discord.Embed:
     embed = discord.Embed(title=f"✅ {w.label} Configured", color=discord.Color.green())
-    embed.add_field(name="Sheet Tab", value=a.tab_name, inline=True)
     embed.add_field(name="Teams", value=_TEAM_SHORT[a.teams], inline=True)
 
     # Team time-slot mapping (#251) — surfaced inline alongside the
@@ -1113,7 +1074,10 @@ async def run_storm_setup(interaction: discord.Interaction, bot, event_type: str
         w.is_premium = await premium.is_premium(
             w.guild_id, interaction=interaction, bot=interaction.client
         )
-        a.tab_name = await _ask_tab(w, saved)
+        # No Sheet Tab step (#717): the answer was saved and never read, and
+        # it suggested the Member Roster tab. Assignments always use the
+        # shared `tab_ds_assignments`. The saved value is carried as is.
+        a.tab_name = saved.current.get("tab_name", "")
         a.teams = await _ask_teams(w, saved)
         await _ask_team_slots(w, saved, a.teams, a)
         a.log_channel_id = await _ask_log_channel(w, saved)

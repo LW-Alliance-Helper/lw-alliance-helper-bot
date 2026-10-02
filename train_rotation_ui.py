@@ -903,6 +903,22 @@ def regenerate_week(
     for dd in draft:
         if dd.member:
             dd.discord_id = id_by_name.get(tr._norm(dd.member), "")
+    # A day already confirmed and posted is history, not a pick: show it as
+    # it happened, and `write_draft_rows` leaves its row alone (#720).
+    week_isos = {dd.date for dd in draft}
+    posted = {
+        h.date: h
+        for h in state.history
+        if h.date in week_isos and h.status == tr.STATUS_POSTED and h.member
+    }
+    for dd in draft:
+        h = posted.get(dd.date)
+        if h is not None:
+            dd.member = h.member
+            dd.reason = h.reason or dd.reason
+            dd.note = h.notes
+            dd.needs_picking = False
+            dd.discord_id = h.discord_id or id_by_name.get(tr._norm(h.member), "")
     tr.write_draft_rows(guild_id, cfg.get("history_tab") or "", draft)
     return draft
 

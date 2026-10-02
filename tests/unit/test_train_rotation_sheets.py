@@ -196,6 +196,43 @@ def test_history_write_draft_replaces_week_keeps_other_rows(patched_tab):
     assert any(h.date == "2026-05-25" and h.status == tr.STATUS_POSTED for h in loaded)
 
 
+def test_a_redraft_never_replaces_a_posted_day(patched_tab):
+    """Re-drafting the current week mid-week used to overwrite days already
+    confirmed and posted, rewriting who drove (#720)."""
+    tr.write_draft_rows(
+        GID,
+        "Train History",
+        [
+            DraftDay("2026-06-01", 0, tr.RULE_AUTO, "Alpha", "auto"),
+            DraftDay("2026-06-02", 1, tr.RULE_AUTO, "Bravo", "auto"),
+        ],
+    )
+    tr.set_day_status(
+        GID,
+        "Train History",
+        "2026-06-01",
+        member="Alpha",
+        reason="auto",
+        status=tr.STATUS_POSTED,
+        posted_at="2026-06-01T09:00",
+    )
+    tr.write_draft_rows(
+        GID,
+        "Train History",
+        [
+            DraftDay("2026-06-01", 0, tr.RULE_AUTO, "Charlie", "auto"),
+            DraftDay("2026-06-02", 1, tr.RULE_AUTO, "Delta", "auto"),
+        ],
+    )
+    by_date = {}
+    for h in tr.load_history(GID, "Train History"):
+        by_date.setdefault(h.date, []).append(h)
+    assert [(h.member, h.status, h.posted_at) for h in by_date["2026-06-01"]] == [
+        ("Alpha", tr.STATUS_POSTED, "2026-06-01T09:00")
+    ]
+    assert [(h.member, h.status) for h in by_date["2026-06-02"]] == [("Delta", tr.STATUS_SCHEDULED)]
+
+
 def test_set_day_status_confirm_updates_in_place(patched_tab):
     draft = [DraftDay("2026-06-01", 0, tr.RULE_AUTO, "Alice", "auto")]
     tr.write_draft_rows(GID, "Train History", draft)

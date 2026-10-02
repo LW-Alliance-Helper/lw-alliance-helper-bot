@@ -414,3 +414,47 @@ class TestLoadWeekDraft:
             draft = ui.load_week_draft(MagicMock(), 1, week_start)
         regen.assert_called_once()
         assert draft is sentinel
+
+
+def test_regenerate_shows_posted_days_as_they_happened():
+    """A re-draft mid-week keeps each posted day as it happened, in the view
+    and on the Sheet (#720)."""
+    from datetime import date
+    from types import SimpleNamespace
+
+    import train_rotation as tr
+    import train_rotation_ui as rui
+
+    week_start = date(2026, 6, 1)
+    state = SimpleNamespace(
+        eligible_pool=["Charlie", "Delta"],
+        role_pools={},
+        member_rules=[],
+        history=[
+            tr.HistoryRow(
+                "2026-06-01", "Alpha", "auto", tr.STATUS_POSTED, "2026-06-01T09:00", "", "111"
+            ),
+            tr.HistoryRow("2026-06-02", "Bravo", "auto", tr.STATUS_SCHEDULED),
+        ],
+        counted_reasons=set(),
+        role_rules_enabled=False,
+        roster=[{"name": "Charlie", "discord_id": "333"}],
+    )
+    fresh = [
+        tr.DraftDay("2026-06-01", 0, tr.RULE_AUTO, "Charlie", "auto"),
+        tr.DraftDay("2026-06-02", 1, tr.RULE_AUTO, "Delta", "auto"),
+    ]
+    with (
+        patch("train_rotation_ui.load_rotation_state", return_value=state),
+        patch("config.get_train_config", return_value={"history_tab": "H"}),
+        patch("train_rotation.load_preset", return_value=MagicMock()),
+        patch("train_rotation_ui.resolve_birthday_mode", return_value=tr.BIRTHDAY_DISABLED),
+        patch("train_rotation.generate_week_draft", return_value=fresh),
+        patch("train_rotation.write_draft_rows") as write,
+    ):
+        draft = rui.regenerate_week(MagicMock(), 1, week_start)
+    assert [(d.date, d.member, d.discord_id) for d in draft] == [
+        ("2026-06-01", "Alpha", "111"),
+        ("2026-06-02", "Delta", ""),
+    ]
+    write.assert_called_once()

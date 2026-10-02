@@ -181,6 +181,32 @@ class TestLoadEventAttendance:
         assert att == {}
         assert errors == []
 
+    def test_attendance_recorded_after_the_cutover_is_read_from_the_member_log(self, fake_env):
+        """Since #245 attendance goes to the Member Log, which history
+        didn't read (#719). A legacy row still wins for its own slot."""
+        fake, gid = fake_env
+        del fake._tabs["DS Attendance"]
+        fake._tabs["DS Member Log"] = _FakeWorksheet(
+            "DS Member Log",
+            [
+                ["Event Date", "Member", "sat_out", "showed_up"],
+                ["2026-05-25", "Alice", "", "yes"],
+                ["2026-05-25", "Bob", "yes", ""],
+                ["2026-05-18", "Carol", "", "yes"],
+            ],
+        )
+        att, errors = sh.load_event_attendance(gid, "DS", "2026-05-25")
+        assert errors == []
+        assert att == {sh._attendance_join_key("", "", "Alice"): "attended"}
+
+    def test_reading_never_creates_a_tab(self, fake_env):
+        fake, gid = fake_env
+        del fake._tabs["DS Attendance"]
+        del fake._tabs["DS Rosters"]
+        sh.load_event_attendance(gid, "DS", "2026-05-18")
+        sh.load_event_roster(gid, "DS", "2026-05-18")
+        assert "DS Attendance" not in fake._tabs and "DS Rosters" not in fake._tabs
+
 
 # ── Renderers ────────────────────────────────────────────────────────────────
 
@@ -222,6 +248,26 @@ class TestRenderEventEmbed:
         body = _embed_body(embed)
         assert "Alice" in body
         assert "✅" in body
+
+    def test_member_log_attendance_marks_every_slot_of_the_member(self):
+        slots = [
+            {
+                "team": "A",
+                "zone": "Power Tower",
+                "member": "Alice",
+                "role": "primary",
+                "power": "412000000",
+                "discord_id": "1",
+                "override_below_floor": False,
+            },
+        ]
+        embed = sh.render_event_embed(
+            event_type="DS",
+            event_date="2026-05-25",
+            slots=slots,
+            attendance={sh._attendance_join_key("", "", "alice"): "attended"},
+        )
+        assert "✅" in _embed_body(embed)
 
     def test_no_attendance_falls_through(self):
         slots = [

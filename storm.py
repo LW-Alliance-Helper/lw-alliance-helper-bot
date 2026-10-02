@@ -1114,7 +1114,11 @@ async def _show_storm_overview(interaction: discord.Interaction, event_type: str
     )
     teams_setting = (scfg.get("teams") or "both").strip()
 
-    embed.add_field(name="Sheet Tab", value=scfg.get("tab_name", "*not set*"), inline=False)
+    # The assignments tab the bot reads and writes, not the storm config's
+    # `tab_name`, which nothing uses (#717).
+    embed.add_field(
+        name="Sheet Tab", value=_assignments_tab_name(interaction.guild_id), inline=False
+    )
     embed.add_field(
         name="Log Channel",
         value=f"<#{log_channel_id}>" if log_channel_id else "*not set*",

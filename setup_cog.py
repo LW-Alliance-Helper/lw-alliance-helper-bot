@@ -30,6 +30,7 @@ from wizard_registry import ExpiringView, OwnedView
 from messages import (
     CANCEL_PLAIN,
     GENERIC_CMD_TIMEOUT,
+    ID_SOURCE_SAME_COLUMN,
     INPUT_INVALID,
     PREV_CHANNEL_GONE,
     SETUP_POINTER_FOOTER,
@@ -823,6 +824,7 @@ async def _send_view_configuration(interaction: discord.Interaction, cfg) -> Non
         f"**Timezone:** {tz_label}",
         f"**Spreadsheet ID:** {sheet_id_display}",
         f"**Member Tab:** {cfg.tab_member_default}",
+        f"**Discord IDs:** {_id_source_summary(cfg)}",
         f"**Discord ID Columns:** {_id_columns_summary(cfg)}",
     ]
     embed.add_field(name="⚙️ Core", value="\n".join(core_lines)[:1024], inline=False)
@@ -1026,6 +1028,7 @@ async def run_setup(interaction: discord.Interaction, bot):
                 ("Leadership Channel", f"<#{cfg.leadership_channel_id}>"),
                 ("Timezone", tz_label),
                 ("Sheet ID", sheet_display),
+                ("Discord IDs", _id_source_summary(cfg)),
                 ("Discord ID Columns", _id_columns_summary(cfg)),
             ],
             cancel_event=cancel_event,
@@ -1203,38 +1206,12 @@ async def run_setup(interaction: discord.Interaction, bot):
         await channel.send(f"{CANCEL_PLAIN} Run `/setup` to start again.")
         return
 
-    # ── Step 7: Discord ID columns (#723) ──────────────────────────────────────
-    answered = bool(cfg.id_columns_scope)
-    await channel.send(
-        "**Step 7 of 7 — Discord ID Columns**\n"
-        "The tabs I create keep a Discord ID beside each member's name, so a member "
-        "who changes their name keeps one record."
+    # ── Step 7: Discord IDs (#723) ─────────────────────────────────────────────
+    visibility_changed = await _ask_discord_ids(
+        channel, cfg, guild_id=guild_id, owner_id=user.id, cancel_event=cancel_event
     )
-    all_tabs = await _ask_core_yes_no(
-        channel,
-        "Do you want the bot to add Discord ID columns to all of your sheets to help "
-        "coordinate your data?\n"
-        "*Yes adds one to the tabs you made too, like your birthday list. "
-        "No keeps them to the tabs I create.*",
-        current=(cfg.id_columns_scope == "all") if answered else None,
-        owner_id=user.id,
-        cancel_event=cancel_event,
-    )
-    if all_tabs is None:
+    if visibility_changed is None:
         return
-    shown = await _ask_core_yes_no(
-        channel,
-        "Do you want to see the Discord ID columns in your sheets?\n"
-        "*No hides them. They keep working, and you can unhide them in Sheets any time.*",
-        current=bool(cfg.id_columns_shown) if answered else None,
-        owner_id=user.id,
-        cancel_event=cancel_event,
-    )
-    if shown is None:
-        return
-    visibility_changed = not answered or bool(cfg.id_columns_shown) != shown
-    cfg.id_columns_scope = "all" if all_tabs else "bot"
-    cfg.id_columns_shown = int(shown)
 
     # ── Confirm and save ───────────────────────────────────────────────────────
     tz_label = TIMEZONE_LABELS.get(cfg.timezone, cfg.timezone)
@@ -1254,6 +1231,7 @@ async def run_setup(interaction: discord.Interaction, bot):
     )
     embed.add_field(name="Timezone", value=tz_label, inline=False)
     embed.add_field(name="Sheet ID", value=f"`{sheet_id[:20]}...`", inline=False)
+    embed.add_field(name="Discord IDs", value=_id_source_summary(cfg), inline=False)
     embed.add_field(name="Discord ID Columns", value=_id_columns_summary(cfg), inline=False)
 
     confirm_view = ConfirmView()
@@ -1295,6 +1273,161 @@ async def run_setup(interaction: discord.Interaction, bot):
     )
     wizard_registry.unregister(user.id, cancel_event)
     print(f"[SETUP] Guild {guild_id} core setup complete")
+
+
+async def _ask_discord_ids(channel, cfg, *, guild_id: int, owner_id: int, cancel_event):
+    """Step 7 of the foundations wizard (#723): where the alliance keeps its
+    members' Discord IDs, then where the bot copies them and whether the
+    columns show. Writes the answers onto `cfg`. Returns whether the
+    show/hide answer changed (so the caller re-applies it to the sheet), or
+    None when the wizard was cancelled, timed out or got a bad letter."""
+    from config import get_member_roster_config
+
+    answered = bool(cfg.id_columns_scope)
+    await channel.send(
+        "**Step 7 of 7 — Discord IDs**\n"
+        "The tabs I create keep a Discord ID beside each member's name, so a member "
+        "who changes their name keeps one record."
+    )
+
+    rcfg = get_member_roster_config(guild_id)
+    if rcfg.get("enabled"):
+        await channel.send(
+            f"Member Sync keeps your members' Discord IDs in "
+            f"**{rcfg.get('tab_name') or 'Member Roster'}**, so I'll copy them from there."
+        )
+        has_source = True
+    else:
+        keeps = await _ask_core_yes_no(
+            channel,
+            "Do you keep your members' Discord IDs in your Sheet?\n"
+            "*If you do, I'll copy each member's ID onto every tab I create that names them.*",
+            current=bool(cfg.id_source_tab) if answered else None,
+            owner_id=owner_id,
+            cancel_event=cancel_event,
+        )
+        if keeps is None:
+            return None
+        if keeps:
+            source = await _ask_id_source(channel, cfg, cancel_event=cancel_event)
+            if source is None:
+                return None
+            cfg.id_source_tab, cfg.id_source_id_col, cfg.id_source_name_col = source
+        else:
+            cfg.id_source_tab, cfg.id_source_id_col, cfg.id_source_name_col = "", -1, -1
+        has_source = keeps
+
+    if not has_source:
+        # Nothing to copy, so nothing to ask about the columns. The answers
+        # stand as they were, or as the default once this step has run.
+        cfg.id_columns_scope = cfg.id_columns_scope or "bot"
+        return not answered
+
+    all_tabs = await _ask_core_yes_no(
+        channel,
+        "Do you want the bot to add Discord ID columns to all of your sheets to help "
+        "coordinate your data?\n"
+        "*Yes adds one to the tabs you made too, like your birthday list. "
+        "No keeps them to the tabs I create.*",
+        current=(cfg.id_columns_scope == "all") if answered else None,
+        owner_id=owner_id,
+        cancel_event=cancel_event,
+    )
+    if all_tabs is None:
+        return None
+    shown = await _ask_core_yes_no(
+        channel,
+        "Do you want to see the Discord ID columns in your sheets?\n"
+        "*No hides them. They keep working, and you can unhide them in Sheets any time.*",
+        current=bool(cfg.id_columns_shown) if answered else None,
+        owner_id=owner_id,
+        cancel_event=cancel_event,
+    )
+    if shown is None:
+        return None
+    visibility_changed = not answered or bool(cfg.id_columns_shown) != shown
+    cfg.id_columns_scope = "all" if all_tabs else "bot"
+    cfg.id_columns_shown = int(shown)
+    return visibility_changed
+
+
+async def _ask_id_source(channel, cfg, *, cancel_event):
+    """The tab, ID column and name column the alliance keeps Discord IDs in,
+    as `(tab, id_col, name_col)`, or None when abandoned or a letter is bad."""
+    tab = await ask_keep_or_change(
+        channel,
+        "Which tab has them?",
+        default="Member Roster",
+        current=cfg.id_source_tab or None,
+        modal_title="Discord ID Tab",
+        modal_label="Tab name",
+        timeout_msg=GENERIC_CMD_TIMEOUT.format(cmd="setup"),
+        cancel_event=cancel_event,
+    )
+    if tab is None:
+        return None
+    tab = tab.strip()
+
+    def _current(idx):
+        return _col_index_to_letter(idx) if cfg.id_source_tab and idx >= 0 else None
+
+    columns = []
+    for prompt, default, current, title in (
+        (
+            f"Which column on **{tab}** has the Discord IDs?",
+            "A",
+            cfg.id_source_id_col,
+            "Discord ID Column",
+        ),
+        (
+            f"Which column on **{tab}** has each member's name?",
+            "B",
+            cfg.id_source_name_col,
+            "Member Name Column",
+        ),
+    ):
+        raw = await ask_keep_or_change(
+            channel,
+            prompt,
+            default=default,
+            current=_current(current),
+            modal_title=title,
+            modal_label="Column letter",
+            timeout_msg=GENERIC_CMD_TIMEOUT.format(cmd="setup"),
+            cancel_event=cancel_event,
+        )
+        if raw is None:
+            return None
+        idx = _col_letter_to_index(raw)
+        if idx < 0:
+            await channel.send(
+                INPUT_INVALID.format(
+                    type="single column letter", example=default, recovery="`/setup`"
+                )
+            )
+            return None
+        columns.append(idx)
+    if columns[0] == columns[1]:
+        await channel.send(ID_SOURCE_SAME_COLUMN)
+        return None
+    return tab, columns[0], columns[1]
+
+
+def _id_source_summary(cfg) -> str:
+    """One line for where the Discord IDs come from (#723)."""
+    try:
+        from config import get_member_roster_config
+
+        if get_member_roster_config(cfg.guild_id).get("enabled"):
+            return "From Member Sync"
+    except Exception:
+        pass
+    if cfg.id_source_tab and cfg.id_source_id_col >= 0 and cfg.id_source_name_col >= 0:
+        return (
+            f"{cfg.id_source_tab}, column {_col_index_to_letter(cfg.id_source_id_col)} "
+            f"(names in {_col_index_to_letter(cfg.id_source_name_col)})"
+        )
+    return "Not kept"
 
 
 def _id_columns_summary(cfg) -> str:

@@ -523,6 +523,59 @@ class TestBirthdayAutoPopulationGate:
         mock_pop.assert_not_called()
 
 
+class TestBirthdayPlacementOnTheAlliancesClock:
+    """#728: placement is about a person's birthday, so it runs at 22:00 in
+    the alliance's own timezone and judges "today" there, not on ET."""
+
+    def _bday_on(self):
+        cfg = _bday_cfg(enabled=1)
+        cfg["train_integration"] = 1
+        return cfg
+
+    async def _run_at(self, instant_utc: datetime, timezone: str):
+        cog = _make_cog()
+
+        class _Clock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return instant_utc.astimezone(tz)
+
+        with (
+            patch("train_cog.check_and_add_birthdays", return_value=({}, [])) as mock_pop,
+            patch("train_cog.save_schedule"),
+            patch("config.get_birthday_population_last_fired", return_value=""),
+            patch("config.mark_birthday_population_fired") as mock_mark,
+            patch("train_cog.datetime", _Clock),
+            patch("config.get_config", return_value=_make_cfg(timezone)),
+            patch("config.get_train_config", return_value=_train_cfg()),
+            patch("config.get_birthday_config", return_value=self._bday_on()),
+            patch("train_cog.load_schedule", return_value={}),
+            patch("config.stamp_loop_heartbeat"),
+        ):
+            cog.bot.guilds = [_make_guild()]
+            cog.bot.get_channel = MagicMock(return_value=None)
+            await type(cog).check_reminder.coro(cog)
+        return mock_pop, mock_mark
+
+    @pytest.mark.asyncio
+    async def test_fires_at_22_00_in_the_alliances_timezone(self):
+        from zoneinfo import ZoneInfo
+
+        # 22:00 in Tokyo on 12 October is 09:00 that morning in New York.
+        instant = datetime(2026, 10, 12, 22, 0, tzinfo=ZoneInfo("Asia/Tokyo"))
+        mock_pop, mock_mark = await self._run_at(instant, "Asia/Tokyo")
+
+        mock_pop.assert_called_once()
+        assert mock_pop.call_args.kwargs["today"] == date_cls(2026, 10, 12)
+        mock_mark.assert_called_once_with(GUILD_ID, "2026-10-12")
+
+    @pytest.mark.asyncio
+    async def test_does_not_fire_at_22_00_eastern_for_another_timezone(self):
+        instant = datetime(2026, 10, 12, 22, 0, tzinfo=ET)
+        mock_pop, _ = await self._run_at(instant, "Asia/Tokyo")
+        mock_pop.assert_not_called()
+
+
 # ── Birthday channel Forbidden isolation ─────────────────────────────────────
 
 

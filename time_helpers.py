@@ -46,7 +46,7 @@ this module without risking an import cycle.
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 # Last War's in-game clock. The game defines this, not us — it is a
 # fixed offset with no DST. This is the single source of truth for the
@@ -100,6 +100,20 @@ def local_today(tz: ZoneInfo | timezone | None = None) -> date:
     If you reach for this, say why in a comment at the call site.
     """
     return datetime.now(tz=tz or ET).date()
+
+
+def guild_zone(cfg) -> ZoneInfo:
+    """The alliance's own timezone from setup, or ET when it has none.
+
+    `cfg` is a guild config (anything with a `timezone` attribute) or None.
+    A name that doesn't resolve falls back to ET too, so a typo in setup
+    never stops a loop. This is the zone for `local_today` and for clock
+    times leadership typed in their own evening, never for a game day.
+    """
+    try:
+        return ZoneInfo(getattr(cfg, "timezone", "") or "America/New_York")
+    except (ZoneInfoNotFoundError, ValueError):
+        return ET
 
 
 def next_clock_time(hour: int, minute: int, tz: ZoneInfo | timezone | None = None) -> datetime:

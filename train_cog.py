@@ -22,7 +22,7 @@ import config_health
 from config import get_config
 from messages import SETUP_POINTER_FOOTER, TRAIN_SCHEDULE_UNREADABLE
 from setup_hub import HUB_BTN_BIRTHDAYS, HUB_BTN_TRAIN
-from time_helpers import local_today
+from time_helpers import guild_zone, local_today
 from train import (
     ScheduleUnreadable,
     _train_tab_name,
@@ -122,7 +122,7 @@ class BirthdayConflictView(ExpiringView):
 
     def __init__(self, cog, guild_id: int, conflicts: list[dict]):
         # 12h window so leadership has the evening + overnight to act; if it
-        # lapses, the 22:00 ET loop re-posts a fresh alert next day.
+        # lapses, the nightly run re-posts a fresh alert next day.
         super().__init__(timeout=43200)
         self.cog = cog
         self.guild_id = guild_id
@@ -515,22 +515,25 @@ class TrainCog(commands.Cog):
                     continue
 
                 # Birthday auto-population into the train schedule.
-                # Fires once per guild per day at exactly 22:00 ET — that
-                # lines up with 00:00 server time, the alliance's nightly
-                # reset. Exact-minute trigger matches the Discord birthday
+                # Fires once per guild per day at exactly 22:00 in the
+                # alliance's own timezone, and judges "today" on that clock:
+                # a birthday is a person's date, so it follows the clock the
+                # announcement below uses, not the game's or ET (#728).
+                # Exact-minute trigger matches the Discord birthday
                 # announcement pattern below; if Railway is restarting
                 # across that minute, the /train hub's 🎂 Run birthday
                 # check button is the manual escape hatch. Dedup persists in
                 # `guild_birthday_config.last_train_population_date` so
                 # Railway redeploys at 22:00 don't re-fire — the previous
                 # in-memory set was wiped on every restart (#89).
-                if bcfg.get("train_integration") and now.hour == 22 and now.minute == 0:
+                bday_now = datetime.now(tz=guild_zone(cfg))
+                if bcfg.get("train_integration") and bday_now.hour == 22 and bday_now.minute == 0:
                     from config import (
                         get_birthday_population_last_fired,
                         mark_birthday_population_fired,
                     )
 
-                    today_iso = today.isoformat()
+                    today_iso = bday_now.date().isoformat()
                     # Skip the auto-pop block when today's run already
                     # landed (Railway restart at 22:00, second tick
                     # within the minute, etc.) — but fall through to
@@ -552,6 +555,7 @@ class TrainCog(commands.Cog):
                             updated_schedule, conflicts = check_and_add_birthdays(
                                 current_schedule,
                                 guild_id=guild.id,
+                                today=bday_now.date(),
                             )
                             if updated_schedule != before or conflicts:
                                 await asyncio.get_event_loop().run_in_executor(

@@ -175,6 +175,32 @@ class TestParseEventDate:
         assert self._parse("13/45/2026") is None
 
 
+class TestParseEventDateLookingBack:
+    """#725: attendance and the participation log record a storm that already
+    ran, so a date without a year is the most recent one, never next year's."""
+
+    def _parse(self, raw, today):
+        return sdh.parse_event_date(raw, today=today, look_back=True)
+
+    def test_yesterday_across_a_month_boundary_stays_this_year(self):
+        assert self._parse("9/30", _dt.date(2026, 10, 1)) == _dt.date(2026, 9, 30)
+
+    def test_late_december_typed_in_january_is_last_year(self):
+        assert self._parse("Dec 31", _dt.date(2027, 1, 1)) == _dt.date(2026, 12, 31)
+
+    def test_today_without_a_year_is_today(self):
+        assert self._parse("10/1", _dt.date(2026, 10, 1)) == _dt.date(2026, 10, 1)
+
+    def test_a_typed_year_is_taken_as_written(self):
+        assert self._parse("10/30/2026", _dt.date(2026, 10, 1)) == _dt.date(2026, 10, 30)
+
+    def test_a_bare_weekday_is_the_most_recent_one(self):
+        # 2026-10-01 is a Thursday: "friday" is the one just gone, "thursday" today.
+        today = _dt.date(2026, 10, 1)
+        assert self._parse("friday", today) == _dt.date(2026, 9, 25)
+        assert self._parse("thursday", today) == today
+
+
 class TestParseEventDateIso:
     def test_returns_iso_string(self):
         today = _dt.date(2026, 5, 13)

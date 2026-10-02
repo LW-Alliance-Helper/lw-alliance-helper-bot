@@ -6,9 +6,9 @@ names a member therefore carries a Discord ID column, and every feature
 finds a member's row the same way: by Discord ID first, then by name. This
 module is that one way; no feature keeps its own copy.
 
-- **Where the IDs come from.** The alliance roster (`member_roster`), read
-  once per write: the synced roster, or the IDs officers wrote into a roster
-  they keep by hand. The name being written is current at that moment, so its
+- **Where the IDs come from.** The synced roster (`member_roster`), or the
+  tab and columns the alliance named in `/setup` as where it keeps its
+  members' Discord IDs. Read once per write. The name being written is current at that moment, so its
   roster ID is the right one to store beside it.
 - **Finding the column.** The column carries a `sheet_tags` tag, so the bot
   finds it wherever an officer moves it and whatever they rename it to. A
@@ -142,48 +142,78 @@ def build_roster(rows: list[tuple[str, str, str]]) -> Roster:
 def load_roster(guild_id: int) -> Roster:
     """The guild's roster identities. Never raises; empty when unreadable.
 
-    A synced roster (Premium Member Sync) gives every identity in its ID
-    column, hand-kept keys for members not on Discord included. A roster the
-    alliance only points the bot at gives the IDs its officers wrote down
-    themselves (`free_roster_rows`)."""
+    Two sources, the first that applies: a synced roster (Premium Member
+    Sync), which gives every identity in its ID column, hand-kept keys for
+    members not on Discord included; else the tab and columns the alliance
+    named in `/setup` as where it keeps its members' Discord IDs. An
+    alliance with neither has no IDs, and every match falls back to names."""
     try:
         import config
         import member_roster
 
-        rcfg = config.get_member_roster_config(guild_id)
-        if rcfg.get("enabled"):
+        if config.get_member_roster_config(guild_id).get("enabled"):
             return build_roster(member_roster.roster_identity_rows(guild_id))
-        values = config.read_member_roster_values(guild_id, rcfg.get("tab_name") or "Member Roster")
-        return build_roster(free_roster_rows(rcfg, values))
+        source = id_source(guild_id)
+        if source is None:
+            return Roster()
+        tab, id_col, name_col = source
+        return build_roster(source_rows(_read_source(guild_id, tab), id_col, name_col))
     except Exception as e:
         print(f"[SHEET IDS] Could not load roster identities for guild {guild_id}: {e}")
         return Roster()
 
 
+def id_source(guild_id: int) -> tuple[str, int, int] | None:
+    """`(tab, ID column, name column)` the alliance keeps Discord IDs in, as
+    answered in `/setup`, or None when they don't keep them."""
+    import config
+
+    cfg = config.get_config(guild_id)
+    tab = (getattr(cfg, "id_source_tab", "") or "").strip() if cfg else ""
+    if not tab:
+        return None
+    id_col = int(getattr(cfg, "id_source_id_col", -1))
+    name_col = int(getattr(cfg, "id_source_name_col", -1))
+    if id_col < 0 or name_col < 0 or id_col == name_col:
+        return None
+    return tab, id_col, name_col
+
+
 _SNOWFLAKE = re.compile(r"^\d{17,20}$")
 
 
-def free_roster_rows(rcfg: dict, values: list[list[str]]) -> list[tuple[str, str, str]]:
-    """`(identity, name, "")` from a roster the alliance keeps by hand.
+def source_rows(values: list[list[str]], id_col: int, name_col: int) -> list[tuple[str, str, str]]:
+    """`(identity, name, "")` from the alliance's own Discord ID tab.
 
-    Its setup only asks for the name column, so the ID column is the one
-    headed "Discord ID" when there is one, else the configured one unless
-    that is the name column itself. Only a cell shaped like a real Discord
-    ID counts: whatever else sits in a column nobody chose is not one."""
-    if not values or len(values) < 2:
-        return []
-    name_col = int(rcfg.get("name_col", 1))
-    id_col, _untagged = find_column(values[0], None)
-    if id_col < 0:
-        id_col = int(rcfg.get("discord_id_col", 0))
-    if id_col < 0 or id_col == name_col:
-        return []
+    Only a cell shaped like a Discord ID counts, so the header row, a blank
+    or a note like "left" never becomes someone's identity."""
     out: list[tuple[str, str, str]] = []
-    for row in values[1:]:
+    for row in values or []:
         identity, name = cell(row, id_col), cell(row, name_col)
         if name and _SNOWFLAKE.match(identity):
             out.append((identity, name, ""))
     return out
+
+
+# The alliance's Discord ID tab changes when an officer adds a member, not
+# from one write to the next, so a short cache keeps a burst of writes to
+# one read. Opened, never created: a tab name with a typo reads as empty.
+_SOURCE_TTL_S = 60.0
+_source_cache: dict[tuple[int, str], tuple[float, list]] = {}
+
+
+def _read_source(guild_id: int, tab: str) -> list[list[str]]:
+    key = (guild_id, tab)
+    hit = _source_cache.get(key)
+    now = time.monotonic()
+    if hit is not None and now - hit[0] < _SOURCE_TTL_S:
+        return hit[1]
+    import config
+
+    sh = config.get_spreadsheet(guild_id)
+    values = sh.worksheet(tab).get_all_values() if sh is not None else []
+    _source_cache[key] = (now, values)
+    return values
 
 
 def same_member(name_a: str, id_a: str, name_b: str, id_b: str) -> bool:
@@ -549,8 +579,8 @@ def alliance_tab_column(
     starts on; the row above it is the header the new column is named in. A
     tab whose data starts on row 1 has no header row and gets no column. Nor
     does any tab while the roster has no IDs to give, so an alliance without
-    Member Sync never finds an empty column in its own tab. The roster tab
-    itself is where the IDs come from, and is never given a second column."""
+    Member Sync never finds an empty column in its own tab. The tab the IDs
+    come from is never given a second column."""
     header_row = first_row - 1
     header = list(rows[header_row - 1]) if 0 < header_row <= len(rows) else []
     if header_row < 1:
@@ -574,10 +604,15 @@ def alliance_tab_column(
 
 
 def _is_roster_tab(guild_id: int, ws) -> bool:
+    """True for a tab the IDs come from: the roster, or the alliance's own
+    Discord ID tab. Neither gets a second ID column."""
     try:
         import config
 
-        roster_tab = config.get_member_roster_config(guild_id).get("tab_name") or "Member Roster"
+        sources = [config.get_member_roster_config(guild_id).get("tab_name") or "Member Roster"]
+        source = id_source(guild_id)
+        if source is not None:
+            sources.append(source[0])
     except Exception:
         return True  # can't tell, so leave the tab alone
-    return _title(ws).strip().lower() == roster_tab.strip().lower()
+    return _title(ws).strip().lower() in {t.strip().lower() for t in sources}

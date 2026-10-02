@@ -304,7 +304,7 @@ reasoning. Verifying their contents is
 | `growth.py` | Growth-tracking snapshots, the Growth Breakdown, and the readers behind `/member_stats` and the Map Manager API. Both tabs' columns are found through `growth_columns` / `breakdown_columns` (tag first, header text second; see § Patterns to reuse), never by header text directly. | ~1.8K |
 | `growth_breakdown_ui.py` | The on-demand Growth Breakdown screen behind `/growth breakdown` and the overview's 📊 button (they carried two copies of it until #668): reads the latest month, applies the 💎 bucket filter only while Premium, and adds one 👀 toggle between the filtered view and every bucket when the filtered view shows a bucket as a count. The embed itself is `growth.format_breakdown_embed`, shared with the auto-post. `tests/unit/test_growth_breakdown_ui.py`. | ~120 |
 | `sheet_tags.py` | Hidden developer-metadata labels on the columns the bot owns in an alliance's Sheet ([#668](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/668)): `read_column_tags` (one call per spreadsheet), `tag_columns`, and `ensure_columns` (widen a tab before writing past its edge). Owning modules define their tag shapes; the growth tabs are the first user. `tests/unit/test_sheet_tags.py`. | ~140 |
-| `sheet_identity.py` | Discord ID columns on every tab that names a member ([#723](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/723)): the roster both ways (`load_roster`, synced or hand-kept), matching by Discord ID first then name (`same_member`, `RowIndex`), the tagged ID column (`ensure_column` for writers, `locate_column` for readers), filling IDs on rows written before (`fill_ids` on a rewrite, throttled `maybe_stamp` on a read), the `/setup` answers (`settings_for`, `apply_visibility`) and the alliance's own tabs (`alliance_tab_column`). Train rotation, the train schedule and birthday check, the storm Member Log and member rules, and `/member_stats` use it; growth moves onto it after #671. `tests/unit/test_sheet_identity.py`, live in `tests/sheets/test_sheet_identity_live.py`. | ~470 |
+| `sheet_identity.py` | Discord ID columns on every tab that names a member ([#723](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/723)): the roster both ways (`load_roster`: Member Sync or the alliance's own ID tab), matching by Discord ID first then name (`same_member`, `RowIndex`), the tagged ID column (`ensure_column` for writers, `locate_column` for readers), filling IDs on rows written before (`fill_ids` on a rewrite, throttled `maybe_stamp` on a read), the `/setup` answers (`settings_for`, `apply_visibility`) and the alliance's own tabs (`alliance_tab_column`). Train rotation, the train schedule and birthday check, the storm Member Log and member rules, and `/member_stats` use it; growth moves onto it after #671. `tests/unit/test_sheet_identity.py`, live in `tests/sheets/test_sheet_identity_live.py`. | ~470 |
 | `sheet_format.py` | The house-style pass for tabs the bot creates ([#729](https://github.com/LW-Alliance-Helper/lw-alliance-helper-bot/issues/729), rules in `notes/DESIGN.md` → Sheet tabs): `TabSpec` says which columns are quantities, text, dates or times and how many to freeze; `ensure_formatted` applies header, body, number formats, frozen panes and a whole-sheet filter once per tab, marked with sheet-level metadata so an officer's later restyle stands, and skips a tab whose header is already styled. Not wired to any tab yet: the mark means it never re-runs, so each tab joins once its dates and words are done. `tests/unit/test_sheet_format.py`, live in `tests/sheets/test_sheet_format_live.py`. | ~250 |
 | `member_roster.py` | Premium roster sync. **Requires `members` privileged intent.** | ~390 |
 | `premium.py` | Central premium gating. Every premium check goes through here. | ~280 |
@@ -540,12 +540,12 @@ Do not write a copy of any of them.
   never changes the tab. A positional row writer puts the ID with
   `set_cell(row, id_col, ...)`, and a rewrite clears the full width it
   writes so the column isn't left stale.
-- **IDs come from the roster.** A synced roster gives every identity in its
-  ID column. A roster the alliance keeps by hand gives the IDs its officers
-  wrote down, from the column headed "Discord ID" (else the configured one,
-  never the name column), and only values shaped like a Discord ID, because
-  that setup never asks which column holds them. An ID on more than one
-  roster row is dropped rather than trusted.
+- **IDs come from one source.** The synced roster when Member Sync is on;
+  otherwise the tab, ID column and name column the alliance named in the
+  foundations wizard (`/setup`, Step 7) as where it keeps its members'
+  Discord IDs. Nothing guesses at a column. Only values shaped like a
+  Discord ID count from the alliance's tab, and an ID on more than one row
+  is dropped rather than trusted.
 - **Readers canonicalise:** a row whose ID is on the roster is counted and
   shown under the member's current name (`Roster.current_name`), so a
   rename never splits a record.

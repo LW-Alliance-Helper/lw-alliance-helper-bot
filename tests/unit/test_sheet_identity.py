@@ -307,6 +307,7 @@ def _alliance_patches(settings, roster):
         patch.object(si, "load_roster", return_value=roster),
         patch.object(si, "read_tags", return_value={}),
         patch("config.get_member_roster_config", return_value={"tab_name": "Member Roster"}),
+        patch.object(si, "id_source", return_value=None),
     )
 
 
@@ -315,7 +316,7 @@ def test_an_alliance_tab_gets_a_column_when_they_asked():
     p = _alliance_patches(
         si.Settings(alliance_tabs=True, answered=True), _roster(("111", "Alpha", ""))
     )
-    with p[0], p[1], p[2], p[3]:
+    with p[0], p[1], p[2], p[3], p[4]:
         idx = si.alliance_tab_column(ws, ws.rows, guild_id=GID, name_col=0, first_row=3)
     assert idx == 2
     assert ws.rows[1] == ["Name", "Birthday", "Discord ID"]  # the header row above the data
@@ -326,7 +327,7 @@ def test_an_alliance_tab_gets_a_column_when_they_asked():
 def test_an_alliance_tab_is_left_alone_by_default():
     ws = _birthday_tab()
     p = _alliance_patches(si.Settings(), _roster(("111", "Alpha", "")))
-    with p[0], p[1], p[2], p[3]:
+    with p[0], p[1], p[2], p[3], p[4]:
         assert si.alliance_tab_column(ws, ws.rows, guild_id=GID, name_col=0, first_row=3) == -1
     assert ws.cell_writes == []
 
@@ -334,7 +335,7 @@ def test_an_alliance_tab_is_left_alone_by_default():
 def test_no_column_when_the_roster_has_no_ids():
     ws = _birthday_tab()
     p = _alliance_patches(si.Settings(alliance_tabs=True, answered=True), si.Roster())
-    with p[0], p[1], p[2], p[3]:
+    with p[0], p[1], p[2], p[3], p[4]:
         assert si.alliance_tab_column(ws, ws.rows, guild_id=GID, name_col=0, first_row=3) == -1
     assert ws.cell_writes == []
 
@@ -344,7 +345,7 @@ def test_the_roster_tab_itself_never_gets_a_second_column():
     p = _alliance_patches(
         si.Settings(alliance_tabs=True, answered=True), _roster(("111", "Alpha", ""))
     )
-    with p[0], p[1], p[2], p[3]:
+    with p[0], p[1], p[2], p[3], p[4]:
         si.alliance_tab_column(ws, ws.rows, guild_id=GID, name_col=1, first_row=2)
     assert ws.cell_writes == [] and ws.spreadsheet.requests == []
 
@@ -354,41 +355,76 @@ def test_a_tab_with_no_header_row_gets_no_column():
     p = _alliance_patches(
         si.Settings(alliance_tabs=True, answered=True), _roster(("111", "Alpha", ""))
     )
-    with p[0], p[1], p[2], p[3]:
+    with p[0], p[1], p[2], p[3], p[4]:
         assert si.alliance_tab_column(ws, ws.rows, guild_id=GID, name_col=0, first_row=1) == -1
 
 
-# ── A roster the alliance keeps by hand ──────────────────────────────────────
+# ── The alliance's own Discord ID tab ────────────────────────────────────────
 
 
-def _free_cfg(**kw):
-    return {"enabled": 0, "tab_name": "Roster", "name_col": 1, "discord_id_col": 0, **kw}
+def _cfg(tab="Discord IDs", id_col=0, name_col=1):
+    return SimpleNamespace(id_source_tab=tab, id_source_id_col=id_col, id_source_name_col=name_col)
 
 
-def test_ids_officers_wrote_down_count():
-    values = [["Discord ID", "Name"], ["111111111111111111", "Alpha"], ["", "Bravo"]]
-    assert si.free_roster_rows(_free_cfg(), values) == [("111111111111111111", "Alpha", "")]
+def test_source_rows_take_only_real_ids():
+    values = [
+        ["Discord ID", "Name"],
+        ["111111111111111111", "Alpha"],
+        ["", "Bravo"],
+        ["left", "Charlie"],
+    ]
+    assert si.source_rows(values, 0, 1) == [("111111111111111111", "Alpha", "")]
 
 
-def test_the_discord_id_header_wins_over_the_default_column():
-    values = [["Rank", "Name", "Discord ID"], ["R4", "Alpha", "222222222222222222"]]
-    assert si.free_roster_rows(_free_cfg(), values) == [("222222222222222222", "Alpha", "")]
+@pytest.mark.parametrize(
+    "cfg, expected",
+    [
+        (_cfg(), ("Discord IDs", 0, 1)),
+        (_cfg(tab=""), None),  # they said they don't keep IDs
+        (_cfg(id_col=2, name_col=2), None),
+        (None, None),
+    ],
+)
+def test_id_source(cfg, expected):
+    with patch("config.get_config", return_value=cfg):
+        assert si.id_source(GID) == expected
 
 
-def test_a_column_nobody_chose_gives_nothing_that_is_not_an_id():
-    values = [["Power", "Name"], ["123456789", "Alpha"], ["R4", "Bravo"]]
-    assert si.free_roster_rows(_free_cfg(), values) == []
-
-
-def test_the_name_column_is_never_read_as_ids():
-    values = [["Name"], ["333333333333333333"]]
-    assert si.free_roster_rows(_free_cfg(name_col=0), values) == []
-
-
-def test_load_roster_reads_a_hand_kept_roster():
-    values = [["Discord ID", "Name"], ["111111111111111111", "Alpha"]]
+def test_load_roster_reads_the_alliances_id_tab(monkeypatch):
+    monkeypatch.setattr(si, "_source_cache", {})
+    sh = SimpleNamespace(
+        worksheet=lambda tab: SimpleNamespace(
+            get_all_values=lambda: [["ID", "Name"], ["111111111111111111", "Alpha"]]
+        )
+    )
     with (
-        patch("config.get_member_roster_config", return_value=_free_cfg()),
-        patch("config.read_member_roster_values", return_value=values),
+        patch("config.get_member_roster_config", return_value={"enabled": 0}),
+        patch("config.get_config", return_value=_cfg()),
+        patch("config.get_spreadsheet", return_value=sh),
     ):
         assert si.load_roster(GID).id_for("alpha") == "111111111111111111"
+
+
+def test_no_source_means_no_ids():
+    with (
+        patch("config.get_member_roster_config", return_value={"enabled": 0}),
+        patch("config.get_config", return_value=_cfg(tab="")),
+        patch("config.get_spreadsheet") as open_sheet,
+    ):
+        assert si.load_roster(GID).by_name == {}
+    open_sheet.assert_not_called()
+
+
+def test_the_id_tab_never_gets_a_second_column():
+    ws = FakeWS([["Discord ID", "Name"], ["111111111111111111", "Alpha"]], title="Discord IDs")
+    with (
+        patch.object(
+            si, "settings_for", return_value=si.Settings(alliance_tabs=True, answered=True)
+        ),
+        patch.object(si, "load_roster", return_value=_roster(("111111111111111111", "Alpha", ""))),
+        patch.object(si, "read_tags", return_value={}),
+        patch("config.get_member_roster_config", return_value={"tab_name": "Member Roster"}),
+        patch("config.get_config", return_value=_cfg()),
+    ):
+        si.alliance_tab_column(ws, ws.rows, guild_id=GID, name_col=1, first_row=2)
+    assert ws.cell_writes == [] and ws.spreadsheet.requests == []

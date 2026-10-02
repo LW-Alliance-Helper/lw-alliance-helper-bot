@@ -139,6 +139,26 @@ def test_load_roster_free_reads_name_column_only():
     ]
 
 
+def test_load_roster_free_reads_ids_the_alliance_wrote_down():
+    # #723: a free roster with a "Discord ID" column officers filled in by
+    # hand gives those IDs, so the rotation can match a renamed member.
+    rows = [
+        ["Name", "Discord ID"],
+        ["Alice", "111111111111111111"],
+        ["Bob", ""],
+    ]
+    cfg = {"enabled": 0, "tab_name": "My Roster", "name_col": 0, "discord_id_col": 0}
+    with (
+        patch("config.get_member_roster_config", return_value=cfg),
+        patch("config.get_member_roster_sheet", return_value=_FakeRosterWS(rows)),
+    ):
+        out = tr.load_roster_members(GID)
+    assert out == [
+        {"name": "Alice", "discord_id": "111111111111111111"},
+        {"name": "Bob", "discord_id": ""},
+    ]
+
+
 def test_load_roster_synced_reads_id_and_display():
     # Sync ON (enabled=1): prefer Display, fall back to Name, read IDs.
     rows = [

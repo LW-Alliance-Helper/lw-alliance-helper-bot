@@ -96,18 +96,13 @@ def test_same_member(a, b, same):
     assert si.same_member(*a, *b) is same
 
 
-def test_only_a_synced_roster_gives_ids():
-    rows = [("111", "Alpha", "")]
-    with (
-        patch("config.get_member_roster_config", return_value={"enabled": 0}),
-        patch("member_roster.roster_identity_rows", return_value=rows),
-    ):
-        assert si.load_roster(GID).by_name == {}
+def test_a_synced_roster_gives_every_identity():
+    rows = [("no-disc-3", "Alpha", "")]
     with (
         patch("config.get_member_roster_config", return_value={"enabled": 1}),
         patch("member_roster.roster_identity_rows", return_value=rows),
     ):
-        assert si.load_roster(GID).id_for("Alpha") == "111"
+        assert si.load_roster(GID).id_for("Alpha") == "no-disc-3"
 
 
 def test_an_unreadable_roster_is_an_empty_one():
@@ -361,3 +356,39 @@ def test_a_tab_with_no_header_row_gets_no_column():
     )
     with p[0], p[1], p[2], p[3]:
         assert si.alliance_tab_column(ws, ws.rows, guild_id=GID, name_col=0, first_row=1) == -1
+
+
+# ── A roster the alliance keeps by hand ──────────────────────────────────────
+
+
+def _free_cfg(**kw):
+    return {"enabled": 0, "tab_name": "Roster", "name_col": 1, "discord_id_col": 0, **kw}
+
+
+def test_ids_officers_wrote_down_count():
+    values = [["Discord ID", "Name"], ["111111111111111111", "Alpha"], ["", "Bravo"]]
+    assert si.free_roster_rows(_free_cfg(), values) == [("111111111111111111", "Alpha", "")]
+
+
+def test_the_discord_id_header_wins_over_the_default_column():
+    values = [["Rank", "Name", "Discord ID"], ["R4", "Alpha", "222222222222222222"]]
+    assert si.free_roster_rows(_free_cfg(), values) == [("222222222222222222", "Alpha", "")]
+
+
+def test_a_column_nobody_chose_gives_nothing_that_is_not_an_id():
+    values = [["Power", "Name"], ["123456789", "Alpha"], ["R4", "Bravo"]]
+    assert si.free_roster_rows(_free_cfg(), values) == []
+
+
+def test_the_name_column_is_never_read_as_ids():
+    values = [["Name"], ["333333333333333333"]]
+    assert si.free_roster_rows(_free_cfg(name_col=0), values) == []
+
+
+def test_load_roster_reads_a_hand_kept_roster():
+    values = [["Discord ID", "Name"], ["111111111111111111", "Alpha"]]
+    with (
+        patch("config.get_member_roster_config", return_value=_free_cfg()),
+        patch("config.read_member_roster_values", return_value=values),
+    ):
+        assert si.load_roster(GID).id_for("alpha") == "111111111111111111"

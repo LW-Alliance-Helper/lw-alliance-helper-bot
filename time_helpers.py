@@ -112,7 +112,7 @@ def guild_zone(cfg) -> ZoneInfo:
     """
     try:
         return ZoneInfo(getattr(cfg, "timezone", "") or "America/New_York")
-    except (ZoneInfoNotFoundError, ValueError):
+    except (ZoneInfoNotFoundError, ValueError, TypeError):
         return ET
 
 

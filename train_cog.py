@@ -307,6 +307,18 @@ class BirthdayConflictView(ExpiringView):
         self.stop()
 
 
+async def post_birthday_conflicts(channel, cog, guild_id: int, conflicts: list[dict]):
+    """Post the conflict alert with its placement buttons to `channel`.
+
+    The one way a conflict reaches leadership, whether the nightly run found
+    it or an officer pressed `/train` → 🎂 Run birthday check: the hub used to
+    send each conflict dict as it was, which put Python data in the channel
+    instead of the alert (#727).
+    """
+    view = BirthdayConflictView(cog, guild_id, conflicts)
+    view.message = await channel.send(render_conflict_message(conflicts), view=view)
+
+
 # ── Cog ────────────────────────────────────────────────────────────────────────
 
 
@@ -548,9 +560,8 @@ class TrainCog(commands.Cog):
                             if conflicts:
                                 alert_channel = self.bot.get_channel(cfg.leadership_channel_id)
                                 if alert_channel:
-                                    view = BirthdayConflictView(self, guild.id, conflicts)
-                                    view.message = await alert_channel.send(
-                                        render_conflict_message(conflicts), view=view
+                                    await post_birthday_conflicts(
+                                        alert_channel, self, guild.id, conflicts
                                     )
                             # Stamp *after* a successful run so a mid-fire
                             # crash leaves the day un-stamped and a manual

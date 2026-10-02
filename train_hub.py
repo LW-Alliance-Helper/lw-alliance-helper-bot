@@ -323,9 +323,12 @@ async def _run_birthday_check(bot, interaction: discord.Interaction):
     added = len(updated) - before
     if added > 0 or alerts:
         await asyncio.to_thread(save_schedule, updated, guild_id)
-    for alert in alerts:
-        if interaction.channel:
-            await interaction.channel.send(alert)
+    if alerts and interaction.channel:
+        from train_cog import post_birthday_conflicts
+
+        await post_birthday_conflicts(
+            interaction.channel, bot.get_cog("TrainCog"), guild_id, alerts
+        )
     if added > 0:
         await interaction.followup.send(
             f"✅ Birthday check complete. Added **{added}** entr{'y' if added == 1 else 'ies'}."

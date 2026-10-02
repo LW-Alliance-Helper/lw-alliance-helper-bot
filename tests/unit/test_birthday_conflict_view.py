@@ -176,3 +176,41 @@ class TestIgnore:
         edit_kwargs = view.message.edit.await_args.kwargs
         assert edit_kwargs["view"] is None
         assert "dismissed" in edit_kwargs["content"].lower()
+
+
+# ── The /train hub's Run birthday check (#727) ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_hub_birthday_check_posts_the_alert_not_raw_data():
+    """The hub used to send each conflict dict to the channel as it was. It
+    now posts the same alert and placement buttons as the nightly run."""
+    import train_cog
+    import train_hub
+    from train import render_conflict_message
+
+    conflict = {
+        **_conflict(),
+        "name": "TestMember Alpha",
+        "taken": ["Jul 3 (TestMember Beta)"],
+        "key": "name:testmember alpha|2026-07-03",
+    }
+    interaction = MagicMock()
+    interaction.guild_id = GUILD_ID
+    interaction.response.defer = AsyncMock()
+    interaction.followup.send = AsyncMock()
+    interaction.channel.send = AsyncMock()
+
+    with (
+        patch("train.load_schedule", return_value={}),
+        patch("train.check_and_add_birthdays", return_value=({}, [conflict])),
+        patch("train.save_schedule", MagicMock()),
+    ):
+        await train_hub._run_birthday_check(MagicMock(), interaction)
+
+    interaction.channel.send.assert_awaited_once()
+    args, kwargs = interaction.channel.send.await_args
+    assert args[0] == render_conflict_message([conflict])
+    view = kwargs["view"]
+    assert isinstance(view, train_cog.BirthdayConflictView)
+    assert view.message is interaction.channel.send.return_value

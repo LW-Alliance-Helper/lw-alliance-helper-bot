@@ -13,7 +13,7 @@ import os
 import re
 from datetime import date, timedelta
 
-from time_helpers import server_today
+from time_helpers import guild_zone, local_today
 
 
 def _get_member_sheet_inner(tab_name: str, guild_id: int = None):
@@ -322,10 +322,11 @@ def check_and_add_birthdays(
     Look ahead lookahead_days from today (from guild birthday config).
     Uses configured tab, name column, and birthday column.
 
-    `today` defaults to the Last War in-game (server) date, because the
-    `schedule` this places into is keyed by server dates (see
-    train_cog.py's check_reminder). Callers that already resolved the day
-    should pass it so both halves agree.
+    `today` defaults to the date in the alliance's own timezone: a birthday
+    is a person's date, not a game day, so "today" and "upcoming" follow
+    the same clock as the birthday announcement (#728). The train day it
+    lands on is the birthday's calendar date. Callers that already
+    resolved the day should pass it so both halves agree.
 
     Returns `(schedule, conflicts)` where `conflicts` is a list of
     structured dicts (one per member who couldn't be placed), each with
@@ -348,11 +349,13 @@ def check_and_add_birthdays(
     if not members:
         return schedule, []
 
-    # Server day, not the container clock: the schedule keys this writes
-    # into are server dates, so the bare system date placed birthdays a
-    # day off every time the 22:00 ET auto-population ran (by then UTC has
-    # always rolled over already).
-    today = today or server_today()
+    # The alliance's own date (time_helpers' documented exception): a
+    # birthday is a bare month/day about a person, judged on the clock the
+    # announcement and /birthdays use, not on the server day (#728).
+    if today is None:
+        from config import get_config
+
+        today = local_today(guild_zone(get_config(guild_id) if guild_id else None))
     check_year = today.year
     added_count = 0
     # Per-member structured conflict records collected during the loop and

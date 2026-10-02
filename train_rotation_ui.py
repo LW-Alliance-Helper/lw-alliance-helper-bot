@@ -28,8 +28,7 @@ manageable size, matching the repo's train.py / train_cog.py split.
 """
 
 import asyncio
-from datetime import date, datetime, timedelta
-from zoneinfo import ZoneInfo
+from datetime import date, timedelta
 
 import discord
 
@@ -202,15 +201,6 @@ def default_draft_week(today: date, draft_day: int) -> date:
     if today.weekday() == draft_day:
         return cur + timedelta(days=7)
     return cur
-
-
-def _guild_today(bot, guild_id: int) -> date:
-    """Today's date in the guild's configured timezone."""
-    from config import get_config
-
-    gcfg = get_config(guild_id)
-    tz = ZoneInfo(gcfg.timezone if gcfg and gcfg.timezone else "America/New_York")
-    return datetime.now(tz=tz).date()
 
 
 # ── Shared helpers ────────────────────────────────────────────────────────────

@@ -22,7 +22,7 @@ import config_health
 from config import get_config
 from messages import SETUP_POINTER_FOOTER, TRAIN_SCHEDULE_UNREADABLE
 from setup_hub import HUB_BTN_BIRTHDAYS, HUB_BTN_TRAIN
-from time_helpers import local_today
+from time_helpers import guild_zone, local_today
 from train import (
     ScheduleUnreadable,
     _train_tab_name,
@@ -122,7 +122,7 @@ class BirthdayConflictView(ExpiringView):
 
     def __init__(self, cog, guild_id: int, conflicts: list[dict]):
         # 12h window so leadership has the evening + overnight to act; if it
-        # lapses, the 22:00 ET loop re-posts a fresh alert next day.
+        # lapses, the nightly run re-posts a fresh alert next day.
         super().__init__(timeout=43200)
         self.cog = cog
         self.guild_id = guild_id
@@ -307,6 +307,18 @@ class BirthdayConflictView(ExpiringView):
         self.stop()
 
 
+async def post_birthday_conflicts(channel, cog, guild_id: int, conflicts: list[dict]):
+    """Post the conflict alert with its placement buttons to `channel`.
+
+    The one way a conflict reaches leadership, whether the nightly run found
+    it or an officer pressed `/train` → 🎂 Run birthday check: the hub used to
+    send each conflict dict as it was, which put Python data in the channel
+    instead of the alert (#727).
+    """
+    view = BirthdayConflictView(cog, guild_id, conflicts)
+    view.message = await channel.send(render_conflict_message(conflicts), view=view)
+
+
 # ── Cog ────────────────────────────────────────────────────────────────────────
 
 
@@ -324,7 +336,7 @@ class TrainCog(commands.Cog):
         # doesn't trip the "new day, reset reminders_fired" branch.
         self.last_reminder_date = datetime.now(tz=ET).date()
         self.reminders_fired = set()  # train-assignment reminders sent today
-        # `birthday_population_fired` used to dedup the 22:00 ET train
+        # `birthday_population_fired` used to dedup the nightly train
         # auto-pop via an in-memory set. Railway restarts wiped it, so
         # the auto-pop re-fired and spammed conflict messages on every
         # redeploy. Dedup now lives on `guild_birthday_config
@@ -503,22 +515,25 @@ class TrainCog(commands.Cog):
                     continue
 
                 # Birthday auto-population into the train schedule.
-                # Fires once per guild per day at exactly 22:00 ET — that
-                # lines up with 00:00 server time, the alliance's nightly
-                # reset. Exact-minute trigger matches the Discord birthday
+                # Fires once per guild per day at exactly 22:00 in the
+                # alliance's own timezone, and judges "today" on that clock:
+                # a birthday is a person's date, so it follows the clock the
+                # announcement below uses, not the game's or ET (#728).
+                # Exact-minute trigger matches the Discord birthday
                 # announcement pattern below; if Railway is restarting
                 # across that minute, the /train hub's 🎂 Run birthday
                 # check button is the manual escape hatch. Dedup persists in
                 # `guild_birthday_config.last_train_population_date` so
                 # Railway redeploys at 22:00 don't re-fire — the previous
                 # in-memory set was wiped on every restart (#89).
-                if bcfg.get("train_integration") and now.hour == 22 and now.minute == 0:
+                bday_now = datetime.now(tz=guild_zone(cfg))
+                if bcfg.get("train_integration") and bday_now.hour == 22 and bday_now.minute == 0:
                     from config import (
                         get_birthday_population_last_fired,
                         mark_birthday_population_fired,
                     )
 
-                    today_iso = today.isoformat()
+                    today_iso = bday_now.date().isoformat()
                     # Skip the auto-pop block when today's run already
                     # landed (Railway restart at 22:00, second tick
                     # within the minute, etc.) — but fall through to
@@ -540,6 +555,7 @@ class TrainCog(commands.Cog):
                             updated_schedule, conflicts = check_and_add_birthdays(
                                 current_schedule,
                                 guild_id=guild.id,
+                                today=bday_now.date(),
                             )
                             if updated_schedule != before or conflicts:
                                 await asyncio.get_event_loop().run_in_executor(
@@ -548,9 +564,8 @@ class TrainCog(commands.Cog):
                             if conflicts:
                                 alert_channel = self.bot.get_channel(cfg.leadership_channel_id)
                                 if alert_channel:
-                                    view = BirthdayConflictView(self, guild.id, conflicts)
-                                    view.message = await alert_channel.send(
-                                        render_conflict_message(conflicts), view=view
+                                    await post_birthday_conflicts(
+                                        alert_channel, self, guild.id, conflicts
                                     )
                             # Stamp *after* a successful run so a mid-fire
                             # crash leaves the day un-stamped and a manual
@@ -841,7 +856,12 @@ class TrainCog(commands.Cog):
             mark_rotation_draft_fired(guild.id, today_iso)
             return
 
-        today = guild_now.date()
+        # The draft fires on the alliance's clock (the day and time leadership
+        # set) but the week it covers is a game week, so it is picked from the
+        # server day, the way the daily confirm picks its day (#726).
+        from time_helpers import server_date_for
+
+        today = server_date_for(guild_now)
         week_start = (
             today if today.weekday() == 0 else today + timedelta(days=(7 - today.weekday()))
         )

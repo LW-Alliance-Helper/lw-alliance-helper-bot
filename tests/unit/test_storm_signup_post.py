@@ -143,59 +143,36 @@ class TestRegistrationEmbed:
         assert ds.color != cs.color
 
 
-class TestTodayInGuildTz:
-    """Past-date validation should compare against TODAY in the alliance's
-    configured timezone, not the host's. Railway is UTC, so an east-of-UTC
-    alliance entering their event date near midnight their time would
-    otherwise see the date flagged as already past."""
+class TestPostSignupUsesTheServerDay:
+    """#726: a storm is a game day, so the manual post's "is this in the
+    past?" check runs on the server day, like the roster builder."""
 
-    def test_uses_guild_timezone_when_configured(self, seeded_db):
-        import config
+    async def _run(self, event_date):
+        from unittest.mock import AsyncMock
 
-        cfg = config.get_config(TEST_GUILD_ID)
-        cfg.timezone = "America/New_York"
-        config.save_config(cfg)
+        inter = MagicMock()
+        inter.guild_id = TEST_GUILD_ID
+        inter.response.send_message = AsyncMock()
+        gate = AsyncMock(return_value=(False, None))
+        with (
+            patch("time_helpers.server_today", return_value=_dt.date(2026, 5, 14)),
+            patch("storm_permissions.is_leader_or_admin", return_value=True),
+            patch("storm_permissions.ensure_premium_structured", gate),
+        ):
+            await ssp.handle_post_signup(MagicMock(), inter, "DS", event_date)
+        return inter.response.send_message, gate
 
-        # Pin "now" to a fixed UTC instant — 03:00 UTC on May 13 — and
-        # verify the helper resolves to May 12 in ET (23:00 the prior
-        # day). The helper calls `_dt.datetime.now(tz)`, so the mock
-        # converts the fixed UTC instant into the requested tz.
-        fixed_utc = _dt.datetime(2026, 5, 13, 3, 0, tzinfo=_dt.timezone.utc)
+    @pytest.mark.asyncio
+    async def test_the_server_day_itself_is_not_past(self):
+        sent, gate = await self._run("2026-05-14")
+        sent.assert_not_awaited()
+        gate.assert_awaited_once()
 
-        class _FrozenDatetime:
-            @staticmethod
-            def now(tz):
-                return fixed_utc.astimezone(tz)
-
-        with patch("storm_signup_post._dt") as mock_dt:
-            mock_dt.datetime = _FrozenDatetime
-            mock_dt.timezone = _dt.timezone
-            mock_dt.date = _dt.date
-            result = ssp._today_in_guild_tz(TEST_GUILD_ID)
-        assert result == _dt.date(2026, 5, 12)
-
-    def test_falls_back_to_utc_when_no_timezone(self, seeded_db):
-        import config
-
-        cfg = config.get_config(TEST_GUILD_ID)
-        cfg.timezone = ""
-        config.save_config(cfg)
-        result = ssp._today_in_guild_tz(TEST_GUILD_ID)
-        assert result == _dt.datetime.now(_dt.timezone.utc).date()
-
-    def test_falls_back_to_utc_when_guild_id_missing(self, seeded_db):
-        result = ssp._today_in_guild_tz(None)
-        assert result == _dt.datetime.now(_dt.timezone.utc).date()
-
-    def test_invalid_tz_string_does_not_crash(self, seeded_db):
-        import config
-
-        cfg = config.get_config(TEST_GUILD_ID)
-        cfg.timezone = "Not/A_Real_Zone"
-        config.save_config(cfg)
-        # Should fall through to UTC, not raise ZoneInfoNotFoundError.
-        result = ssp._today_in_guild_tz(TEST_GUILD_ID)
-        assert isinstance(result, _dt.date)
+    @pytest.mark.asyncio
+    async def test_the_day_before_the_server_day_is_past(self):
+        sent, gate = await self._run("2026-05-13")
+        assert "is in the past" in sent.await_args.args[0]
+        gate.assert_not_awaited()
 
 
 class TestRegistrationEmbedTeamsGate:

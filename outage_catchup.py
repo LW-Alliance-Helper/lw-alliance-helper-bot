@@ -92,8 +92,6 @@ OUTAGE_THRESHOLD = timedelta(minutes=5)
 # channels are populated and the bot has settled.
 SETTLE_DELAY_SECONDS = 60
 
-_DEFAULT_TZ = "America/New_York"
-
 
 # ── Data model ───────────────────────────────────────────────────────────────
 
@@ -162,10 +160,9 @@ def detect_outage_window(
 
 
 def _guild_tz(cfg) -> ZoneInfo:
-    try:
-        return ZoneInfo((getattr(cfg, "timezone", "") or _DEFAULT_TZ))
-    except Exception:
-        return ZoneInfo(_DEFAULT_TZ)
+    from time_helpers import guild_zone
+
+    return guild_zone(cfg)
 
 
 def _parse_hhmm(raw: str) -> Optional[tuple[int, int]]:

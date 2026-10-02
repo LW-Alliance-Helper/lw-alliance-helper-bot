@@ -126,6 +126,7 @@ def parse_event_date(
     raw: str,
     *,
     today: Optional[_dt.date] = None,
+    look_back: bool = False,
 ) -> Optional[_dt.date]:
     """Permissive parse of an officer-typed event date.
 
@@ -139,6 +140,12 @@ def parse_event_date(
       * Weekday names (with optional ``next`` prefix): ``Sunday``,
         ``next sunday`` — bare weekday treats "today is that weekday"
         as next week, not this week, since storms are pre-scheduled.
+
+    `look_back=True` is for surfaces that record an event that already
+    happened (attendance, the participation log): a date typed without a
+    year, or a bare weekday, resolves to the most recent occurrence on or
+    before today instead of the next one (#725). A year the officer
+    typed, and ``next <weekday>``, are taken as written either way.
 
     Returns None on unparseable input — caller surfaces the error,
     suggests a canonical format.
@@ -161,6 +168,8 @@ def parse_event_date(
     # Weekday tokens — single name, or "next <weekday>" / "this <weekday>".
     parts = lower.split()
     if len(parts) == 1 and parts[0] in _WEEKDAY_MAP:
+        if look_back:
+            return today - _dt.timedelta(days=(today.weekday() - _WEEKDAY_MAP[parts[0]]) % 7)
         return _next_weekday(today, _WEEKDAY_MAP[parts[0]], same_day_rolls=True)
     if len(parts) == 2 and parts[0] in ("next", "this") and parts[1] in _WEEKDAY_MAP:
         return _next_weekday(
@@ -190,18 +199,20 @@ def parse_event_date(
         except ValueError:
             continue
         # `strptime` defaults the missing year to 1900; rebuild with
-        # the inferred year ("on or after today, this year, else next").
+        # the inferred year ("on or after today, this year, else next",
+        # or under `look_back` "on or before today, this year, else last").
+        step = -1 if look_back else 1
         try:
             candidate = parsed.replace(year=today.year)
         except ValueError:
-            # Feb 29 in a non-leap current year — try next year instead.
+            # Feb 29 in a non-leap current year — try the neighbouring year.
             try:
-                return parsed.replace(year=today.year + 1)
+                return parsed.replace(year=today.year + step)
             except ValueError:
                 continue
-        if candidate < today:
+        if (candidate > today) if look_back else (candidate < today):
             try:
-                candidate = parsed.replace(year=today.year + 1)
+                candidate = parsed.replace(year=today.year + step)
             except ValueError:
                 continue
         return candidate

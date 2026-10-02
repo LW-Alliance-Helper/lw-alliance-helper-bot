@@ -153,3 +153,23 @@ class TestNextClockTime:
     def test_defaults_to_et(self):
         now = datetime(2026, 5, 8, 10, 0, tzinfo=self.ET)
         assert self._at(now, 17, 0).tzinfo == self.ET
+
+
+class TestGuildZone:
+    """The alliance's timezone, ET when setup has none or it doesn't resolve."""
+
+    def test_configured_zone(self):
+        from types import SimpleNamespace
+
+        from time_helpers import guild_zone
+
+        assert guild_zone(SimpleNamespace(timezone="Asia/Tokyo")).key == "Asia/Tokyo"
+
+    def test_missing_blank_or_unknown_falls_back_to_et(self):
+        from types import SimpleNamespace
+
+        from time_helpers import ET, guild_zone
+
+        assert guild_zone(None) == ET
+        assert guild_zone(SimpleNamespace(timezone="")) == ET
+        assert guild_zone(SimpleNamespace(timezone="Not/A_Zone")) == ET

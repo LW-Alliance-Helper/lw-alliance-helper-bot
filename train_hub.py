@@ -200,7 +200,9 @@ async def _open_week_draft(bot, interaction: discord.Interaction):
     from config import get_train_config
 
     tcfg = get_train_config(guild_id)
-    today = ui._guild_today(bot, guild_id)
+    # Train days are game days: the week is picked from the server day, as the
+    # daily confirm picks its day (#726).
+    today = server_today()
     # Default to the week leadership is most likely planning: the current week,
     # but the upcoming week once it's the configured draft day (#304).
     week_start = ui.default_draft_week(today, int(tcfg.get("weekly_draft_day", 6)))
@@ -228,7 +230,7 @@ async def _render_logs(bot, interaction: discord.Interaction):
     # Full state gives the roster, so "fewest trains" can surface members who've
     # driven zero times and therefore have no history rows at all.
     state = await ui.load_rotation_state_async(bot, guild_id)
-    today = ui._guild_today(bot, guild_id)
+    today = server_today()
     tally = tr.member_tally(
         state.eligible_pool, state.history, state.counted_reasons, state.member_rules, today
     )
@@ -321,9 +323,12 @@ async def _run_birthday_check(bot, interaction: discord.Interaction):
     added = len(updated) - before
     if added > 0 or alerts:
         await asyncio.to_thread(save_schedule, updated, guild_id)
-    for alert in alerts:
-        if interaction.channel:
-            await interaction.channel.send(alert)
+    if alerts and interaction.channel:
+        from train_cog import post_birthday_conflicts
+
+        await post_birthday_conflicts(
+            interaction.channel, bot.get_cog("TrainCog"), guild_id, alerts
+        )
     if added > 0:
         await interaction.followup.send(
             f"✅ Birthday check complete. Added **{added}** entr{'y' if added == 1 else 'ies'}."

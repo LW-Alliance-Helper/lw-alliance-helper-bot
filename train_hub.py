@@ -200,7 +200,9 @@ async def _open_week_draft(bot, interaction: discord.Interaction):
     from config import get_train_config
 
     tcfg = get_train_config(guild_id)
-    today = ui._guild_today(bot, guild_id)
+    # Train days are game days: the week is picked from the server day, as the
+    # daily confirm picks its day (#726).
+    today = server_today()
     # Default to the week leadership is most likely planning: the current week,
     # but the upcoming week once it's the configured draft day (#304).
     week_start = ui.default_draft_week(today, int(tcfg.get("weekly_draft_day", 6)))
@@ -228,7 +230,7 @@ async def _render_logs(bot, interaction: discord.Interaction):
     # Full state gives the roster, so "fewest trains" can surface members who've
     # driven zero times and therefore have no history rows at all.
     state = await ui.load_rotation_state_async(bot, guild_id)
-    today = ui._guild_today(bot, guild_id)
+    today = server_today()
     tally = tr.member_tally(
         state.eligible_pool, state.history, state.counted_reasons, state.member_rules, today
     )

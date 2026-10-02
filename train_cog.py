@@ -841,7 +841,12 @@ class TrainCog(commands.Cog):
             mark_rotation_draft_fired(guild.id, today_iso)
             return
 
-        today = guild_now.date()
+        # The draft fires on the alliance's clock (the day and time leadership
+        # set) but the week it covers is a game week, so it is picked from the
+        # server day, the way the daily confirm picks its day (#726).
+        from time_helpers import server_date_for
+
+        today = server_date_for(guild_now)
         week_start = (
             today if today.weekday() == 0 else today + timedelta(days=(7 - today.weekday()))
         )

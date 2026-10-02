@@ -225,6 +225,7 @@ class TestRunOneTick:
             patch.object(
                 sss, "_guild_today_and_now", return_value=(_dt.date(2026, 5, 12), _dt.time(14, 0))
             ),
+            patch.object(sss, "server_today", return_value=_dt.date(2026, 5, 12)),
             patch("premium.is_premium", new=AsyncMock(return_value=True)),
             patch("storm_signup_post.post_registration", post_mock),
         ):
@@ -235,6 +236,28 @@ class TestRunOneTick:
         # post_registration(bot, guild, event_type, event_date, *, structured=...)
         assert call_args[2] == "DS"
         assert call_args[3] == "2026-05-15"  # next Friday after Tue 5/12
+
+    @pytest.mark.asyncio
+    async def test_event_date_counts_from_the_server_day(self, seeded_db):
+        """#726: the post time is the alliance's clock, the storm is the
+        game's. Friday 08:00 in an alliance far east of the server is still
+        Thursday in the game, so the post is for this Friday's storm, not
+        the one a week out."""
+        self._seed(poll_dow=4, signup_time="08:00")
+        bot, _guild = self._fake_bot()
+
+        post_mock = AsyncMock(return_value={"status": "ok", "channel_id": 99, "message_id": 1234})
+        with (
+            patch.object(
+                sss, "_guild_today_and_now", return_value=(_dt.date(2026, 5, 15), _dt.time(8, 0))
+            ),
+            patch.object(sss, "server_today", return_value=_dt.date(2026, 5, 14)),
+            patch("premium.is_premium", new=AsyncMock(return_value=True)),
+            patch("storm_signup_post.post_registration", post_mock),
+        ):
+            fired = await sss._run_one_tick(bot)
+        assert fired == 1
+        assert post_mock.await_args.args[3] == "2026-05-15"
 
     @pytest.mark.asyncio
     async def test_skips_when_guild_not_premium(self, seeded_db):

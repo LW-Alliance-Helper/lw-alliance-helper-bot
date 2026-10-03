@@ -43,6 +43,13 @@ class _FakeWorksheet:
     def update(self, range_, values, value_input_option=None):
         self._rows = [list(r) for r in values]
 
+    def batch_update(self, updates, value_input_option=None):
+        from gspread.utils import a1_to_rowcol
+
+        for u in updates:
+            row, col = a1_to_rowcol(u["range"])
+            self.update_cell(row, col, u["values"][0][0])
+
     def delete_rows(self, index, end_index=None):
         """gspread's atomic row delete (1-indexed)."""
         if end_index is None:
@@ -889,3 +896,154 @@ class TestRuleIdentity:
             smr.save_rule(gid, "DS", smr.Rule("per_member", "Zulu", "A", sub_type="team"))
             rules = smr.list_rules(gid, "DS")
         assert rules[0].subject == "Zulu" and rules[0].discord_id == ""
+
+
+# ── Words, not codes (#729) ──────────────────────────────────────────────────
+
+
+def _seed(fake, rows):
+    """A DS Member Rules tab already holding `rows` under the bot's header."""
+    ws = fake.add_worksheet("DS Member Rules")
+    ws._rows = [list(smr._HEADER)] + [list(r) for r in rows]
+    return ws
+
+
+class TestRuleWords:
+    def test_rows_are_written_in_words(self, fake_sheet):
+        fake, gid = fake_sheet
+        with patch("sheet_identity.load_roster", return_value=_roster()):
+            smr.save_rule(gid, "DS", smr.Rule("power_band", "250000000", "Nuclear Silo"))
+            smr.save_rule(gid, "DS", smr.Rule("per_member", "Alpha", "A", sub_type="team"))
+            smr.save_rule(
+                gid, "DS", smr.Rule("per_member", "Bravo", "Info Center", sub_type="zone")
+            )
+        ws = fake._tabs["DS Member Rules"]
+        assert [r[0] for r in ws._rows[1:]] == ["Power band", "Per member", "Per member"]
+        assert [r[2] for r in ws._rows[1:]] == ["", "Team", "Zone"]
+        # The Subject stays as given: a threshold, a name.
+        assert [r[1] for r in ws._rows[1:]] == ["250000000", "Alpha", "Bravo"]
+
+    def test_rule_objects_still_hold_codes(self, fake_sheet):
+        fake, gid = fake_sheet
+        with patch("sheet_identity.load_roster", return_value=_roster()):
+            smr.save_rule(gid, "DS", smr.Rule("per_member", "Alpha", "A", sub_type="team"))
+            smr.save_rule(gid, "DS", smr.Rule("power_band", "250000000", "Nuclear Silo"))
+            rules = smr.list_rules(gid, "DS")
+        assert [(r.rule_type, r.sub_type) for r in rules] == [
+            ("per_member", "team"),
+            ("power_band", ""),
+        ]
+
+    def test_old_codes_and_any_case_still_read(self, fake_sheet):
+        fake, gid = fake_sheet
+        _seed(
+            fake,
+            [
+                ["power_band", "250000000", "", "Nuclear Silo", ""],
+                ["per_member", "Alpha", "team", "A", ""],
+                ["PER MEMBER", "Bravo", "ZONE", "Arsenal", ""],
+                ["power-band", "300000000", "", "Info Center", ""],
+                ["Per member", "Charlie", "Team", "B", "note"],
+            ],
+        )
+        with patch("sheet_identity.load_roster", return_value=_roster()):
+            rules = smr.list_rules(gid, "DS")
+        assert [(r.rule_type, r.sub_type, r.value) for r in rules] == [
+            ("power_band", "", "Nuclear Silo"),
+            ("per_member", "team", "A"),
+            ("per_member", "zone", "Arsenal"),
+            ("power_band", "", "Info Center"),
+            ("per_member", "team", "B"),
+        ]
+
+    def test_a_row_of_unknown_type_is_still_skipped(self, fake_sheet):
+        fake, gid = fake_sheet
+        _seed(fake, [["Something else", "Alpha", "team", "A", ""]])
+        with patch("sheet_identity.load_roster", return_value=_roster()):
+            assert smr.list_rules(gid, "DS") == []
+
+    def test_a_save_rewords_older_rows_and_leaves_other_text(self, fake_sheet):
+        fake, gid = fake_sheet
+        ws = _seed(
+            fake,
+            [
+                ["power_band", "250000000", "", "Nuclear Silo", ""],
+                ["per_member", "Alpha", "team", "A", ""],
+                ["Something else", "Bravo", "whatever", "x", ""],
+            ],
+        )
+        with patch("sheet_identity.load_roster", return_value=_roster()):
+            ok, _ = smr.save_rule(gid, "DS", smr.Rule("power_band", "300000000", "Arsenal"))
+        assert ok
+        assert [r[0] for r in ws._rows[1:]] == [
+            "Power band",
+            "Per member",
+            "Something else",
+            "Power band",
+        ]
+        assert ws._rows[2][2] == "Team" and ws._rows[3][2] == "whatever"
+
+    def test_a_duplicate_is_found_across_code_and_word(self, fake_sheet):
+        fake, gid = fake_sheet
+        _seed(fake, [["power_band", "250000000", "", "Nuclear Silo", ""]])
+        with patch("sheet_identity.load_roster", return_value=_roster()):
+            ok, msg = smr.save_rule(gid, "DS", smr.Rule("power_band", "250000000", "Nuclear Silo"))
+        assert not ok and "already exists" in msg
+
+    def test_a_save_formats_the_tab_with_dropdowns_of_the_words(self, fake_sheet):
+        fake, gid = fake_sheet
+        with (
+            patch("sheet_identity.load_roster", return_value=_roster()),
+            patch("sheet_format.ensure_formatted") as fmt,
+        ):
+            smr.save_rule(gid, "DS", smr.Rule("power_band", "250000000", "Nuclear Silo"))
+        fmt.assert_called_once()
+        spec = fmt.call_args.args[1]
+        assert spec is smr.RULES_FORMAT
+        assert dict(spec.dropdowns) == {
+            0: ("Power band", "Per member"),
+            2: ("Team", "Zone"),
+        }
+        assert spec.text == (1,) and spec.quantity == ()
+
+    def test_a_failed_write_does_not_format(self, fake_sheet):
+        fake, gid = fake_sheet
+        ws = _seed(fake, [])
+
+        def _boom(*a, **k):
+            raise RuntimeError("quota")
+
+        ws.append_row = _boom
+        with (
+            patch("sheet_identity.load_roster", return_value=_roster()),
+            patch("sheet_format.ensure_formatted") as fmt,
+        ):
+            ok, _ = smr.save_rule(gid, "DS", smr.Rule("power_band", "250000000", "Nuclear Silo"))
+        assert not ok
+        fmt.assert_not_called()
+
+
+class TestDeleteFindsTheRuleRow:
+    """`delete_rule_at` used to delete sheet row `2 + index`, so a blank
+    row or a row of unknown type above the rule put it on the wrong one."""
+
+    def test_skipped_rows_above_do_not_shift_the_delete(self, fake_sheet):
+        fake, gid = fake_sheet
+        ws = _seed(
+            fake,
+            [
+                ["", "", "", "", ""],
+                ["Something else", "Zulu", "", "", ""],
+                ["Power band", "250000000", "", "Nuclear Silo", ""],
+                ["Per member", "Alpha", "Team", "A", ""],
+                ["Per member", "Bravo", "Zone", "Arsenal", ""],
+            ],
+        )
+        with patch("sheet_identity.load_roster", return_value=_roster()):
+            # Index 1 is Alpha's rule, on sheet row 5.
+            assert smr.delete_rule_at(gid, "DS", 1) is True
+            rules = smr.list_rules(gid, "DS")
+        assert [r.subject for r in rules] == ["250000000", "Bravo"]
+        # The blank row and the unknown row are untouched.
+        assert ws._rows[1] == ["", "", "", "", ""]
+        assert ws._rows[2][1] == "Zulu"

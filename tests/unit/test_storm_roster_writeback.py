@@ -42,7 +42,7 @@ def test_cs_primary_fields():
         "Stage": "1",
         "Zone": "Power Tower",
         "Member": "Ada",
-        "Role": "primary",
+        "Role": "Primary",
         "Power at Assignment": "5000000",  # by discord_id
         "Discord ID": "123",
     }
@@ -51,9 +51,10 @@ def test_cs_primary_fields():
 def test_sub_omits_zone_and_stage():
     a = {"member_name": "Bo", "discord_id": None, "team": "B", "role": "sub"}
     f = wb.assignment_to_fields("2026-06-27", a, POWER)
-    assert f["Zone"] == "" and f["Stage"] == "" and f["Role"] == "sub"
+    assert f["Zone"] == "" and f["Stage"] == "" and f["Role"] == "Sub"
     assert f["Discord ID"] == ""
-    assert f["Power at Assignment"] == ""  # Bo's power is None -> blank
+    # Bo's power is None: written as the builder writes it (#729).
+    assert f["Power at Assignment"] == "Unknown"
 
 
 def test_ds_primary_has_no_stage():

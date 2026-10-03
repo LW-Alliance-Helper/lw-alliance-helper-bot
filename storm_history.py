@@ -45,9 +45,13 @@ def _attendance_tab_name(guild_id: int, event_type: str) -> str:
     return cfg.get("attendance_tab") or config.default_structured_tab(event_type, "attendance_tab")
 
 
-def _read_tab_values(guild_id: int, tab_name: str) -> tuple[list[list[str]], list[str]]:
+def _read_tab_values(
+    guild_id: int, tab_name: str, *, read=None
+) -> tuple[list[list[str]], list[str]]:
     """Generic Sheet-tab reader. Returns `(rows, errors)`. Missing tab
-    returns `([], [])` so callers degrade gracefully.
+    returns `([], [])` so callers degrade gracefully. `read` reads the
+    worksheet (default `get_all_values`); the Rosters tab passes
+    `storm_sheet_tabs.read_rosters` so its dates come back as ISO text.
 
     A read never creates the tab. It used to, which left an empty,
     headerless Rosters tab for the first Approve & Post to append rows
@@ -65,9 +69,15 @@ def _read_tab_values(guild_id: int, tab_name: str) -> tuple[list[list[str]], lis
     except Exception:
         return [], []
     try:
-        return ws.get_all_values(), []
+        return (read(ws) if read else ws.get_all_values()), []
     except Exception as e:
         return [], [f"read {tab_name} failed: {e}"]
+
+
+def _read_rosters_values(guild_id: int, tab_name: str) -> tuple[list[list[str]], list[str]]:
+    import storm_sheet_tabs
+
+    return _read_tab_values(guild_id, tab_name, read=storm_sheet_tabs.read_rosters)
 
 
 def list_event_dates(
@@ -81,7 +91,7 @@ def list_event_dates(
     tab = _rosters_tab_name(guild_id, event_type)
     if not tab:
         return [], []
-    rows, errors = _read_tab_values(guild_id, tab)
+    rows, errors = _read_rosters_values(guild_id, tab)
     if errors or not rows:
         return [], errors
     header = [c.strip() for c in rows[0]]
@@ -118,8 +128,10 @@ def load_event_roster(
     Each row: `{team, zone, member, role, power, discord_id,
     override_below_floor}`. Returns `([], errors_or_empty)` when the
     tab or event doesn't exist."""
+    import storm_sheet_tabs as tabs
+
     tab = _rosters_tab_name(guild_id, event_type)
-    rows, errors = _read_tab_values(guild_id, tab) if tab else ([], [])
+    rows, errors = _read_rosters_values(guild_id, tab) if tab else ([], [])
     if not rows:
         return [], errors
 
@@ -145,15 +157,9 @@ def load_event_roster(
         ovr_col = _col("Override Below Floor")
     paired_col = _col("Paired With")
 
-    # Truthy values for the override column. Officers may hand-edit
-    # the Sheet — accept the same set the bot would write plus the
-    # standard yes-aliases. Matches the set used by
-    # `storm_officer_view._read_roster_rows` +
-    # `storm_roster_builder._read_roster_powers` +
-    # `storm_attendance.load_rostered_slots` so a literal in any of
-    # those columns is interpreted the same way.
-    truthy = {"yes", "y", "1", "true", "t", "x"}
-
+    # Role and Override hold words since #729 ("Primary" / "Sub",
+    # "Yes"), and the old codes before it; `storm_sheet_tabs` reads
+    # both, and the override column's hand-typed yes-aliases.
     slots: list[dict] = []
     for row in rows[1:]:
 
@@ -168,10 +174,10 @@ def load_event_roster(
                 "phase": _cell(phase_col),  # "1"/"2" for phased rows, "" otherwise
                 "zone": _cell(zone_col),
                 "member": _cell(member_col),
-                "role": _cell(role_col) or "primary",
-                "power": _cell(power_col),
+                "role": tabs.ROLE_WORDS.code(_cell(role_col)) or tabs.ROLE_PRIMARY,
+                "power": tabs.power_code(_cell(power_col)),
                 "discord_id": _cell(id_col),
-                "override_below_floor": _cell(ovr_col).lower() in truthy,
+                "override_below_floor": tabs.is_override(_cell(ovr_col)),
                 # `paired_with` is the primary's name on sub rows when
                 # sub_mode=paired; blank for primary rows and pool-mode subs.
                 # Older rosters_tab data without the column reads as "".

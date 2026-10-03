@@ -1713,9 +1713,10 @@ class TestWriteRostersTab:
         rc = srb._ROSTERS_HEADER.index("Role")
         pc = srb._ROSTERS_HEADER.index("Power at Assignment")
         data = [(r[mc], r[rc], r[pc]) for r in rows[1:]]
-        assert ("Alice", "primary", "412000000") in data
-        assert ("Bob", "primary", "350000000") in data
-        assert ("Carol", "sub", "280000000") in data
+        # Words, not codes (#729): the roster image's column headers.
+        assert ("Alice", "Primary", "412000000") in data
+        assert ("Bob", "Primary", "350000000") in data
+        assert ("Carol", "Sub", "280000000") in data
 
     def test_power_unknown_renders_as_unknown(self, fake_env):
         fake, gid = fake_env
@@ -1741,7 +1742,7 @@ class TestWriteRostersTab:
         mc = srb._ROSTERS_HEADER.index("Member")
         pc = srb._ROSTERS_HEADER.index("Power at Assignment")
         data_rows = [r for r in rows[1:] if r and r[mc] == "Erin"]
-        assert data_rows[0][pc] == "unknown"
+        assert data_rows[0][pc] == "Unknown"
 
     def test_event_date_and_team_in_each_row(self, fake_env):
         fake, gid = fake_env
@@ -1802,7 +1803,7 @@ class TestOverrideBelowFloorCapture:
         col = self._override_col()
         mc = srb._ROSTERS_HEADER.index("Member")
         carol_row = next(r for r in rows[1:] if r[mc] == "Carol")
-        assert carol_row[col] == "yes"
+        assert carol_row[col] == "Yes"
 
     def test_at_floor_member_flag_blank(self, fake_env):
         fake, gid = fake_env
@@ -4753,10 +4754,13 @@ class TestRostersTabHeaderMigration:
         assert "Override Below Floor" not in new_header
 
         # The pre-existing "yes" flag on the legacy column carried into
-        # the new column rather than being lost.
+        # the new column rather than being lost, reworded as the
+        # migration rewrites the row (#729).
         override_idx = srb._ROSTERS_HEADER.index("Override Below Minimum")
         prior_row = old_rosters._rows[1]
-        assert prior_row[override_idx] == "yes"
+        assert prior_row[override_idx] == "Yes"
+        assert prior_row[srb._ROSTERS_HEADER.index("Role")] == "Primary"
+        assert "Posted At (server time)" in new_header
 
 
 class TestAutoFillSummarySplitsPairedFromPrimary:

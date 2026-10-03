@@ -13,33 +13,32 @@ Assignment` from the configured power source and writes a row per assignment,
 Row-building is a pure function (`build_rows`) so the column mapping is unit
 tested without Sheets; `write_mm_storm_roster` does the I/O (if-empty check,
 power lookup, append). Identity merge key is `discord_id` then `member_name`.
+
+Rows are written the way the roster builder writes them (#729,
+`storm_sheet_tabs`): the same header, words in Role, "Unknown" for a power the
+roster doesn't have, `USER_ENTERED` so the date and power are real values, and
+the Discord ID column adopted as text first. Posted At stays blank: a plan
+from Map Manager hasn't been posted by the bot.
 """
 
 from __future__ import annotations
 
-# The columns the bot writes for a fresh rosters_tab. The bot's readers address
-# columns by header NAME (not position), so an existing tab's own header order
-# is honored on append; this is only used when the tab has no header yet.
-DEFAULT_ROSTER_HEADER = [
-    "Event Date",
-    "Team",
-    "Stage",
-    "Zone",
-    "Member",
-    "Role",
-    "Power at Assignment",
-    "Discord ID",
-]
+import storm_sheet_tabs
+
+# The columns the bot writes for a fresh rosters_tab: the roster builder's.
+# The bot's readers address columns by header NAME (not position), so an
+# existing tab's own header order is honored on append; this is only used
+# when the tab has no header yet.
+DEFAULT_ROSTER_HEADER = storm_sheet_tabs.ROSTERS_HEADER
 
 
 def _power_for(assignment: dict, power_index: dict) -> str:
     """Look up the member's power from the storm power index, by discord_id then
-    name. Returns "" when unknown (the index has no entry, or power is None)."""
+    name. Returns "Unknown" when the index has no entry or power is None."""
     discord_id = assignment.get("discord_id")
     key = str(discord_id) if discord_id else (assignment.get("member_name") or "")
     info = power_index.get(key) or {}
-    power = info.get("power")
-    return "" if power is None else str(power)
+    return storm_sheet_tabs.power_cell(info.get("power"))
 
 
 def assignment_to_fields(event_date: str, assignment: dict, power_index: dict) -> dict:
@@ -48,7 +47,8 @@ def assignment_to_fields(event_date: str, assignment: dict, power_index: dict) -
     Subs carry no zone/stage (MM omits those keys for `role: "sub"`); CS
     primaries carry a numeric stage, DS none. Power is filled from the index.
     """
-    is_sub = assignment.get("role") == "sub"
+    role = storm_sheet_tabs.ROLE_WORDS.code(assignment.get("role") or "primary")
+    is_sub = role == storm_sheet_tabs.ROLE_SUB
     discord_id = assignment.get("discord_id")
     stage = assignment.get("stage")
     return {
@@ -56,8 +56,8 @@ def assignment_to_fields(event_date: str, assignment: dict, power_index: dict) -
         "Team": assignment.get("team") or "",
         "Stage": "" if (is_sub or stage is None) else str(stage),
         "Zone": "" if is_sub else (assignment.get("zone") or ""),
-        "Member": assignment.get("member_name") or "",
-        "Role": assignment.get("role") or "primary",
+        "Member": storm_sheet_tabs.text_cell(assignment.get("member_name") or ""),
+        "Role": storm_sheet_tabs.ROLE_WORDS.word(role),
         "Power at Assignment": _power_for(assignment, power_index),
         "Discord ID": str(discord_id) if discord_id else "",
     }
@@ -103,6 +103,8 @@ def _delete_date_rows(ws, all_values: list[list[str]], header: list[str], event_
         date_idx = header.index("Event Date")
     except ValueError:
         date_idx = 0
+    # `all_values` comes from `storm_sheet_tabs.read_rosters`, so a date
+    # cell reads as ISO text whatever the alliance's locale shows.
     to_delete = [
         i
         for i, row in enumerate(all_values[1:], start=2)  # row 1 = header
@@ -140,6 +142,7 @@ def write_mm_storm_roster(
     Blocking (gspread) — call via `asyncio.to_thread`.
     """
     import config
+    import sheet_format
     import storm_history
 
     et = event_type.upper()  # bot uses "DS" / "CS"
@@ -150,13 +153,16 @@ def write_mm_storm_roster(
     tab = storm_history._rosters_tab_name(guild_id, et)
     sh = config.get_spreadsheet(guild_id)
     ws = config.get_or_create_worksheet(sh, tab)
-    all_values = ws.get_all_values()
+    all_values = storm_sheet_tabs.read_rosters(ws)
 
-    if all_values and all_values[0]:
+    if all_values and any(all_values[0]):
         header = [c.strip() for c in all_values[0]]
     else:
         header = list(DEFAULT_ROSTER_HEADER)
-        ws.update("A1", [header], value_input_option="USER_ENTERED")
+        ws.update("A1", [header], value_input_option="RAW")
+    # Old Posted At header renamed, Discord ID column adopted as text
+    # before the USER_ENTERED append below can round an ID.
+    storm_sheet_tabs.prepare_rosters(ws, header, guild_id=guild_id)
 
     if overwrite and existing:
         _delete_date_rows(ws, all_values, header, event_date)
@@ -165,4 +171,5 @@ def write_mm_storm_roster(
     rows = build_rows(header, event_date, assignments, power_index)
     if rows:
         ws.append_rows(rows, value_input_option="USER_ENTERED")
+        sheet_format.ensure_formatted(ws, storm_sheet_tabs.rosters_format(header))
     return {"written": True, "rows": len(rows)}

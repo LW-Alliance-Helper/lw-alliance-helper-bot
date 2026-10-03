@@ -871,9 +871,16 @@ def _mirror_vote_to_sheet(
     """Append a vote row to the alliance's configured `signups_tab`.
     No-op if the structured flow is off (no tab to write to) or the
     spreadsheet isn't configured. Raises on Sheet errors; caller handles.
+
+    The row is written `USER_ENTERED` so Event Date is a real date and
+    Voted At a server-time date-time (a vote is a game moment); On
+    Behalf? reads "Yes" / "No". The tab takes the house style after its
+    first write (#729, see `storm_sheet_tabs`).
     """
-    import datetime as _dt
     import config
+    import sheet_format
+    import storm_sheet_tabs as tabs
+    from time_helpers import server_stamp
 
     structured = config.get_structured_storm_config(guild_id, event_type)
     if not structured.get("structured_flow_enabled"):
@@ -891,30 +898,26 @@ def _mirror_vote_to_sheet(
     ws = config.get_or_create_worksheet(
         sh,
         tab_name,
-        header_row=[
-            "Event Date",
-            "Member",
-            "Vote",
-            "Voter Discord ID",
-            "On Behalf?",
-            "Voted At (UTC)",
-        ],
+        header_row=tabs.SIGNUPS_HEADER,
         rows=1000,
-        cols=6,
+        cols=len(tabs.SIGNUPS_HEADER),
     )
+    # Old Voted At header renamed, and the voter ID column adopted as
+    # text before the USER_ENTERED append below can round an ID.
+    tabs.prepare_signups(ws, guild_id=guild_id)
 
-    voted_at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
     ws.append_row(
         [
             event_date,
-            target_label,
+            tabs.text_cell(target_label),
             _VOTE_CONFIRMATIONS.get(vote, vote),
             str(voter_id),
-            "yes" if is_on_behalf else "no",
-            voted_at,
+            tabs.BEHALF_WORDS.word("yes" if is_on_behalf else "no"),
+            server_stamp(),
         ],
-        value_input_option="RAW",
+        value_input_option="USER_ENTERED",
     )
+    sheet_format.ensure_formatted(ws, tabs.SIGNUPS_FORMAT)
 
 
 def _prune_votes_from_sheet(
@@ -929,7 +932,7 @@ def _prune_votes_from_sheet(
     log doesn't keep stale or conflicting rows after a clear.
 
     With `on_behalf_only=True`, only rows whose `On Behalf?` column reads
-    "yes" are removed. No-op (returns 0) if the structured flow is off, the
+    "Yes" (or the "yes" written before #729) are removed. No-op (returns 0) if the structured flow is off, the
     tab/spreadsheet isn't configured, or the tab doesn't exist yet. Other
     Sheet errors propagate; caller handles. Returns the number of rows
     deleted.
@@ -942,6 +945,7 @@ def _prune_votes_from_sheet(
     import gspread
 
     import config
+    import storm_sheet_tabs as tabs
 
     structured = config.get_structured_storm_config(guild_id, event_type)
     if not structured.get("structured_flow_enabled"):
@@ -958,7 +962,8 @@ def _prune_votes_from_sheet(
     except gspread.WorksheetNotFound:
         return 0  # No tab yet => nothing to prune.
 
-    rows = ws.get_all_values()
+    # Event Date as ISO text whatever the alliance's locale shows (#729).
+    rows = tabs.read_signups(ws)
     if len(rows) < 2:
         return 0  # Header only (or empty) => nothing to prune.
 
@@ -982,8 +987,8 @@ def _prune_votes_from_sheet(
         if (row[date_col].strip() if len(row) > date_col else "") != event_date:
             continue
         if on_behalf_only:
-            behalf = row[behalf_col].strip().lower() if len(row) > behalf_col else ""
-            if behalf != "yes":
+            behalf = row[behalf_col] if len(row) > behalf_col else ""
+            if tabs.BEHALF_WORDS.code(behalf) != "yes":
                 continue
         to_delete.append(i)
 

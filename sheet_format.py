@@ -298,11 +298,13 @@ def read_values(ws, spec: TabSpec, *, keep_text: bool = False) -> list[list[str]
     whose every column is the bot's, where a number reads as its digits.
     `keep_text=True` is for a tab that also holds the alliance's own columns
     (the roster, Squad Powers): every cell reads exactly as it displays, and
-    only the date columns are read a second time, unformatted. A worksheet
-    that can't read unformatted (a test double) is read as before."""
+    only the date and quantity columns are read a second time, unformatted,
+    so a locale that writes `301.000.000` or hides a decimal under `#,##0`
+    never changes the number the bot reads. A worksheet that can't read
+    unformatted (a test double) is read as before."""
     dates, stamps = set(spec.date), set(spec.datetime)
     if keep_text:
-        return _read_keeping_text(ws, dates, stamps)
+        return _read_keeping_text(ws, dates, stamps, set(spec.quantity))
     try:
         rows = ws.get_all_values(
             value_render_option="UNFORMATTED_VALUE",
@@ -324,9 +326,11 @@ def read_values(ws, spec: TabSpec, *, keep_text: bool = False) -> list[list[str]
     return out
 
 
-def _read_keeping_text(ws, dates: set[int], stamps: set[int]) -> list[list[str]]:
+def _read_keeping_text(
+    ws, dates: set[int], stamps: set[int], quantities: set[int] = frozenset()
+) -> list[list[str]]:
     rows = ws.get_all_values()
-    columns = sorted(dates | stamps)
+    columns = sorted(dates | stamps | quantities)
     if not columns or len(rows) < 2:
         return rows
     letters = [_letter(c + 1) for c in columns]
@@ -340,7 +344,7 @@ def _read_keeping_text(ws, dates: set[int], stamps: set[int]) -> list[list[str]]
         print(f"[SHEET FORMAT] Could not read dates on '{getattr(ws, 'title', '?')}': {e}")
         return rows
     for col, values in zip(columns, ranges):
-        convert = date_cell if col in dates else stamp_cell
+        convert = date_cell if col in dates else stamp_cell if col in stamps else _text
         for offset, cell in enumerate(values or []):
             row = rows[offset + 1] if offset + 1 < len(rows) else None
             if row is None or col >= len(row):

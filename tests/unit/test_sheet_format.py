@@ -224,3 +224,16 @@ def test_keep_text_reads_alliance_columns_as_shown_and_only_dates_unformatted():
     rows = sf.read_values(WS(), sf.TabSpec(date=(1,)), keep_text=True)
     assert rows[1] == ["Alpha", "2026-09-28", "123.4M"]
     assert rows[2] == ["Bravo", "2026-09-28", "5,000"]
+
+
+def test_keep_text_reads_quantities_unformatted_whatever_the_locale():
+    class WS:
+        def get_all_values(self, **kw):
+            return [["Tag", "Power"], ["ABC", "301.000.000"], ["DEF", "1"]]
+
+        def batch_get(self, ranges, **kw):
+            assert ranges == ["B2:B"]
+            return [[[301000000], [1.2]]]
+
+    rows = sf.read_values(WS(), sf.TabSpec(quantity=(1,)), keep_text=True)
+    assert [r[1] for r in rows[1:]] == ["301000000", "1.2"]

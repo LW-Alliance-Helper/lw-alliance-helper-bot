@@ -466,7 +466,8 @@ def test_read_tab_finds_a_moved_week_date_by_its_header():
     assert ad.parse_rows(values)[0].week_date == _dt.date(2026, 9, 28)
     # The guess at the bot's layout is thrown away, not half-applied.
     assert values[1][header.index(ad.COL_SEASON)] == "S36"
-    assert sheet.ranges[-1] == ["A2:A"]
+    # The real Week Date column is re-read; quantities are re-read with it.
+    assert sheet.ranges[-1][0] == "A2:A"
 
 
 def test_read_tab_keeps_a_typed_week_date_as_typed():

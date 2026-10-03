@@ -1240,3 +1240,14 @@ class TestStrategyWords:
             ((col, options),) = spec.dropdowns
             assert header[col] == "Stage Count"
             assert options == ("Flat", "2 Stages (S1 + S2)", "3 Stages (S1 + S2 + S3)")
+
+
+def test_parse_power_reads_a_number_grouped_as_a_non_us_sheet_shows_it():
+    """#729: `#,##0` displays with the Sheet's own grouping."""
+    from storm_strategy import parse_power
+
+    assert parse_power("304.743.912") == 304_743_912
+    assert parse_power("304 743 912") == 304_743_912
+    assert parse_power("304 743 912") == 304_743_912
+    assert parse_power("1.234") == 1  # a typed decimal, not thousands
+    assert parse_power("250M") == 250_000_000

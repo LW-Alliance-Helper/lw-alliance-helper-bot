@@ -86,12 +86,23 @@ def _sibling_zone_names(zones: "list[ZoneRow]", zone_name: str) -> "list[str]":
 # magnitude-aware shorthand (#64).
 
 
+# A full number grouped the way a non-US Sheet displays `#,##0` (#729):
+# `304.743.912`, `304 743 912`. Two groups at least, so a decimal someone
+# typed (`1.234`) is never read as thousands.
+_LOCALE_GROUPED = re.compile(r"\d{1,3}(?:[.\s  ']\d{3}){2,}")
+
+
 def parse_power(raw: str) -> int | None:
     """Parse a power value into an integer. Returns None on garbage.
-    Accepts: '250M', '1.2B', '300,000,000', '300000000', '300', empty."""
+    Accepts: '250M', '1.2B', '300,000,000', '300000000', '300', empty, and a
+    number grouped with dots or spaces as a non-US Sheet shows it
+    ('304.743.912')."""
     if raw is None:
         return None
-    s = str(raw).strip().replace(",", "").replace("_", "").lower()
+    s = str(raw).strip()
+    if _LOCALE_GROUPED.fullmatch(s):
+        return int(re.sub(r"\D", "", s))
+    s = s.replace(",", "").replace("_", "").lower()
     if not s:
         return 0
     multiplier = 1

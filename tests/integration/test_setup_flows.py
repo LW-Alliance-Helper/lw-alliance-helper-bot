@@ -161,6 +161,11 @@ class TestRunSetup:
             patch("setup_cog.TextInputModal", return_value=sheet_modal),
             patch("setup_cog.ModalLaunchView", return_value=modal_view),
             patch("setup_cog.ConfirmView", side_effect=[share_done, confirm]),
+            # Step 7 (#723): keeps IDs, Yes to every tab, No to seeing them.
+            patch("setup_cog._ask_core_yes_no", AsyncMock(side_effect=[True, True, False])) as ask,
+            patch("setup_cog._ask_id_source", AsyncMock(return_value=("Discord IDs", 0, 1))),
+            patch("config.get_member_roster_config", return_value={"enabled": 0}),
+            patch("sheet_identity.apply_visibility", return_value=0) as apply_vis,
         ):
             make_send_handler(interaction.channel)
             await run_setup(interaction, bot)
@@ -171,6 +176,66 @@ class TestRunSetup:
         assert cfg.timezone == "America/New_York"
         assert cfg.spreadsheet_id == "test_sheet_id_abc"
         assert cfg.setup_complete == 1
+        assert cfg.id_columns_scope == "all"
+        assert cfg.id_columns_shown == 0
+        assert (cfg.id_source_tab, cfg.id_source_id_col, cfg.id_source_name_col) == (
+            "Discord IDs",
+            0,
+            1,
+        )
+        # First answers: no saved value to keep, and the columns already in
+        # the sheet take the answer.
+        assert [c.kwargs["current"] for c in ask.call_args_list] == [None, None, None]
+        apply_vis.assert_called_once_with(TEST_GUILD_ID, shown=False)
+
+    @pytest.mark.asyncio
+    async def test_rerun_offers_the_saved_id_column_answers(self, seeded_db):
+        """#723: a configured guild re-running /setup sees Keep current for
+        both Discord ID questions, and keeping them touches no columns."""
+        import config
+        from setup_cog import run_setup
+
+        cfg = config.get_config(TEST_GUILD_ID)
+        cfg.setup_complete = True
+        cfg.id_columns_scope = "bot"
+        cfg.id_columns_shown = 1
+        cfg.id_source_tab = "Discord IDs"
+        cfg.id_source_id_col = 0
+        cfg.id_source_name_col = 1
+        config.save_config(cfg)
+
+        interaction = make_mock_interaction()
+        role = MagicMock(id=1)
+        role.name = "Member"
+        channel = MagicMock(id=2, category_id=None)
+        step = dict(confirmed=True, is_current_stale=False, cancelled=False, wait=AsyncMock())
+        with (
+            patch("setup_cog.RoleSelectStep", return_value=MagicMock(selected_role=role, **step)),
+            patch(
+                "setup_cog.ChannelSelectStep",
+                return_value=MagicMock(selected_channel=channel, **step),
+            ),
+            patch(
+                "setup_cog.TimezoneSelectView",
+                return_value=MagicMock(selected="America/New_York", **step),
+            ),
+            patch("setup_cog.TextInputModal", return_value=MagicMock(value="sheet_xyz")),
+            patch("setup_cog.ModalLaunchView", return_value=MagicMock(**step)),
+            patch("setup_cog.ConfirmView", side_effect=[MagicMock(**step), MagicMock(**step)]),
+            patch("setup_cog._ask_core_yes_no", AsyncMock(side_effect=[True, False, True])) as ask,
+            patch("setup_cog._ask_id_source", AsyncMock(return_value=("Discord IDs", 0, 1))),
+            patch("config.get_member_roster_config", return_value={"enabled": 0}),
+            patch("sheet_identity.apply_visibility", return_value=0) as apply_vis,
+        ):
+            make_send_handler(
+                interaction.channel, view_overrides={"proceed": True, "cancelled": False}
+            )
+            await run_setup(interaction, AsyncMock())
+
+        assert [c.kwargs["current"] for c in ask.call_args_list] == [True, False, True]
+        apply_vis.assert_not_called()
+        cfg = config.get_config(TEST_GUILD_ID)
+        assert (cfg.id_columns_scope, cfg.id_columns_shown) == ("bot", 1)
 
     @pytest.mark.asyncio
     async def test_existing_config_shows_summary_and_cancel(self, seeded_db):
@@ -1993,3 +2058,98 @@ class TestPremiumCaps:
             f"Custom button not found in {[getattr(c, 'label', None) for c in freq_view.children]}"
         )
         assert custom_button.disabled is True
+
+
+class TestDiscordIdStep:
+    """Step 7 of the foundations wizard on its own (#723)."""
+
+    @staticmethod
+    def _cfg(**kw):
+        import config
+
+        cfg = config.GuildConfig(guild_id=TEST_GUILD_ID)
+        for k, v in kw.items():
+            setattr(cfg, k, v)
+        return cfg
+
+    @pytest.mark.asyncio
+    async def test_no_ids_kept_skips_the_column_questions(self):
+        from setup_cog import _ask_discord_ids
+
+        channel = MagicMock(send=AsyncMock())
+        cfg = self._cfg(id_source_tab="Old", id_source_id_col=0, id_source_name_col=1)
+        with (
+            patch("config.get_member_roster_config", return_value={"enabled": 0}),
+            patch("setup_cog._ask_core_yes_no", AsyncMock(return_value=False)) as ask,
+        ):
+            changed = await _ask_discord_ids(
+                channel, cfg, guild_id=TEST_GUILD_ID, owner_id=1, cancel_event=None
+            )
+        assert ask.await_count == 1
+        assert (cfg.id_source_tab, cfg.id_source_id_col, cfg.id_source_name_col) == ("", -1, -1)
+        assert cfg.id_columns_scope == "bot"
+        assert changed is True
+
+    @pytest.mark.asyncio
+    async def test_member_sync_is_the_source_without_asking(self):
+        from setup_cog import _ask_discord_ids
+
+        channel = MagicMock(send=AsyncMock())
+        cfg = self._cfg()
+        with (
+            patch(
+                "config.get_member_roster_config",
+                return_value={"enabled": 1, "tab_name": "Member Roster"},
+            ),
+            patch("setup_cog._ask_core_yes_no", AsyncMock(side_effect=[False, True])) as ask,
+            patch("setup_cog._ask_id_source", AsyncMock()) as source,
+        ):
+            await _ask_discord_ids(
+                channel, cfg, guild_id=TEST_GUILD_ID, owner_id=1, cancel_event=None
+            )
+        source.assert_not_awaited()
+        assert ask.await_count == 2  # only the two column questions
+        sent = " ".join(str(c.args[0]) for c in channel.send.call_args_list)
+        assert "Member Sync keeps your members' Discord IDs in **Member Roster**" in sent
+        assert (cfg.id_columns_scope, cfg.id_columns_shown) == ("bot", 1)
+
+    @pytest.mark.asyncio
+    async def test_id_source_asks_tab_then_two_letters(self):
+        from setup_cog import _ask_id_source
+
+        cfg = self._cfg()
+        with patch(
+            "setup_cog.ask_keep_or_change", AsyncMock(side_effect=["Discord IDs", "c", "A"])
+        ):
+            got = await _ask_id_source(MagicMock(send=AsyncMock()), cfg, cancel_event=None)
+        assert got == ("Discord IDs", 2, 0)
+
+    @pytest.mark.asyncio
+    async def test_the_same_column_twice_is_refused(self):
+        from messages import ID_SOURCE_SAME_COLUMN
+        from setup_cog import _ask_id_source
+
+        channel = MagicMock(send=AsyncMock())
+        with patch("setup_cog.ask_keep_or_change", AsyncMock(side_effect=["Tab", "A", "A"])):
+            got = await _ask_id_source(channel, self._cfg(), cancel_event=None)
+        assert got is None
+        channel.send.assert_awaited_with(ID_SOURCE_SAME_COLUMN)
+
+    @pytest.mark.asyncio
+    async def test_a_bad_letter_is_refused(self):
+        from setup_cog import _ask_id_source
+
+        channel = MagicMock(send=AsyncMock())
+        with patch("setup_cog.ask_keep_or_change", AsyncMock(side_effect=["Tab", "1"])):
+            assert await _ask_id_source(channel, self._cfg(), cancel_event=None) is None
+        assert "column letter" in channel.send.call_args.args[0]
+
+    def test_summary_lines(self):
+        from setup_cog import _id_source_summary
+
+        cfg = self._cfg(id_source_tab="Discord IDs", id_source_id_col=0, id_source_name_col=1)
+        with patch("config.get_member_roster_config", return_value={"enabled": 0}):
+            assert _id_source_summary(cfg) == "Discord IDs, column A (names in B)"
+            assert _id_source_summary(self._cfg()) == "Not kept"
+        with patch("config.get_member_roster_config", return_value={"enabled": 1}):
+            assert _id_source_summary(cfg) == "From Member Sync"

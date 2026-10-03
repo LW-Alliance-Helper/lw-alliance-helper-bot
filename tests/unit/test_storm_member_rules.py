@@ -26,6 +26,14 @@ class _FakeWorksheet:
     def get_all_values(self):
         return [list(r) for r in self._rows]
 
+    def row_values(self, n):
+        return list(self._rows[n - 1]) if len(self._rows) >= n else []
+
+    def update_cell(self, row, col, value):
+        target = self._rows[row - 1]
+        target.extend([""] * (col - len(target)))
+        target[col - 1] = value
+
     def append_row(self, row, value_input_option=None):
         self._rows.append([str(c) for c in row])
 
@@ -834,3 +842,50 @@ class TestListRulesCsLegacyValueMigration:
         rules = smr.list_rules(gid, "CS")
         team_rules = [r for r in rules if r.sub_type == "team"]
         assert team_rules[0].value == "B"
+
+
+# ── Discord ID on every rule row (#723) ──────────────────────────────────────
+
+
+def _roster(*members):
+    import sheet_identity
+
+    return sheet_identity.build_roster([(did, name, "") for did, name in members])
+
+
+class TestRuleIdentity:
+    def test_a_typed_name_is_saved_with_its_roster_id(self, fake_sheet):
+        fake, gid = fake_sheet
+        with patch("sheet_identity.load_roster", return_value=_roster(("111", "Alpha"))):
+            ok, _ = smr.save_rule(gid, "DS", smr.Rule("per_member", "Alpha", "A", sub_type="team"))
+            assert ok
+            rules = smr.list_rules(gid, "DS")
+        ws = next(iter(fake._tabs.values()))
+        assert ws._rows[0][-1] == "Discord ID"
+        assert ws._rows[1][1] == "Alpha" and ws._rows[1][-1] == "111"
+        # Read back by ID, so a rename can't strand it.
+        assert rules[0].subject == "111"
+        assert rules[0].discord_id == "111"
+
+    def test_a_picked_member_keeps_their_id(self, fake_sheet):
+        fake, gid = fake_sheet
+        with patch("sheet_identity.load_roster", return_value=_roster()):
+            smr.save_rule(gid, "DS", smr.Rule("per_member", "222", "B", sub_type="team"))
+            rules = smr.list_rules(gid, "DS")
+        assert rules[0].subject == "222" and rules[0].discord_id == "222"
+
+    def test_typing_the_name_of_a_picked_member_is_a_duplicate(self, fake_sheet):
+        fake, gid = fake_sheet
+        with patch("sheet_identity.load_roster", return_value=_roster(("111", "Alpha"))):
+            smr.save_rule(gid, "DS", smr.Rule("per_member", "111", "A", sub_type="team"))
+            ok, msg = smr.save_rule(
+                gid, "DS", smr.Rule("per_member", "Alpha", "B", sub_type="team")
+            )
+        assert not ok and "already exists" in msg
+
+    def test_a_name_not_on_the_roster_stays_a_name(self, fake_sheet):
+        fake, gid = fake_sheet
+        with patch("sheet_identity.load_roster", return_value=_roster()):
+            smr.save_rule(gid, "DS", smr.Rule("per_member", "Zulu", "A", sub_type="team"))
+            rules = smr.list_rules(gid, "DS")
+        assert rules[0].subject == "Zulu" and rules[0].discord_id == ""

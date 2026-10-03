@@ -72,6 +72,18 @@ class GuildConfig:
     # as a thread member. 0 = no helper configured (the default).
     # Set via `/setup` → Survey translation.
     survey_translate_bot_id: int = 0
+    # Discord ID columns (#723), asked once in the foundations wizard.
+    # Scope: "" = never answered (bot-created tabs only), "bot" = bot-created
+    # tabs only, "all" = the alliance's own tabs too. Shown: 0 = hidden (the
+    # default), 1 = shown. See sheet_identity.py.
+    id_columns_scope: str = ""
+    id_columns_shown: int = 0
+    # Where the alliance keeps its members' Discord IDs, when it isn't Member
+    # Sync (#723): a tab, its ID column and its name column (0-based). An
+    # empty tab means they told /setup they don't keep them.
+    id_source_tab: str = ""
+    id_source_id_col: int = -1
+    id_source_name_col: int = -1
 
     def parse_time(self, time_str: str) -> tuple[int, int]:
         """Parse 'HH:MM' into (hour, minute)."""
@@ -152,7 +164,12 @@ def init_db():
                 tab_member_default       TEXT    DEFAULT 'Season 5 - Off-Season',
                 setup_complete           INTEGER DEFAULT 0,
                 release_announcements_enabled INTEGER DEFAULT 1,
-                survey_translate_bot_id  INTEGER DEFAULT 0
+                survey_translate_bot_id  INTEGER DEFAULT 0,
+                id_columns_scope         TEXT    DEFAULT '',
+                id_columns_shown         INTEGER DEFAULT 0,
+                id_source_tab            TEXT    DEFAULT '',
+                id_source_id_col         INTEGER DEFAULT -1,
+                id_source_name_col       INTEGER DEFAULT -1
             )
         """)
         conn.commit()
@@ -1948,6 +1965,24 @@ def init_db():
             print("[CONFIG] Added survey_translate_bot_id to guild_configs")
         except Exception:
             pass
+
+        # ── Discord ID columns (#723) ──────────────────────────────────────────
+        # The foundations wizard's answers. Empty scope means never answered,
+        # which the bot reads as bot-created tabs only, hidden; an empty
+        # source tab means the alliance keeps no Discord IDs of its own.
+        for col_name, col_def in (
+            ("id_columns_scope", "TEXT DEFAULT ''"),
+            ("id_columns_shown", "INTEGER DEFAULT 0"),
+            ("id_source_tab", "TEXT DEFAULT ''"),
+            ("id_source_id_col", "INTEGER DEFAULT -1"),
+            ("id_source_name_col", "INTEGER DEFAULT -1"),
+        ):
+            try:
+                conn.execute(f"ALTER TABLE guild_configs ADD COLUMN {col_name} {col_def}")
+                conn.commit()
+                print(f"[CONFIG] Added {col_name} to guild_configs")
+            except Exception:
+                pass
 
 
 def get_config(guild_id: int) -> Optional[GuildConfig]:

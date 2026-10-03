@@ -321,8 +321,9 @@ class TestSaveAttendanceWritesMemberLog:
         assert errors == []
         ml = fake.worksheet("DS Member Log")
         rows = ml.get_all_values()
-        # Header + 4 member rows (Alice, Bob, Carol, Dan).
-        assert rows[0] == ["Event Date", "Member", "showed_up"]
+        # Header + 4 member rows (Alice, Bob, Carol, Dan). The Discord ID
+        # column (#723) follows the question columns.
+        assert rows[0] == ["Event Date", "Member", "showed_up", "Discord ID"]
         data = {r[1]: r[2] for r in rows[1:]}
         assert data["Alice"] == "yes"
         assert data["Bob"] == ""

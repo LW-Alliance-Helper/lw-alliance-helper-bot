@@ -635,3 +635,40 @@ class TestFmtNum:
         assert ms._fmt_num(1_200_000_000) == "1.2B"
         assert ms._fmt_num(304_743) == "304,743"
         assert ms._fmt_num(950) == "950"
+
+
+# ── Train History by Discord ID first, then name (#723) ───────────────────────
+
+
+class TestTrainStatsIdentity:
+    @staticmethod
+    def _row(day, member, discord_id="", reason="vs"):
+        import train_rotation as tr
+
+        return tr.HistoryRow(
+            date=day, member=member, reason=reason, status=tr.STATUS_POSTED, discord_id=discord_id
+        )
+
+    def test_drives_under_an_old_name_count(self):
+        history = [
+            self._row("2026-05-01", "Alpha", "111"),
+            self._row("2026-05-08", "Bravo", "111"),
+        ]
+        target = ms.Target(name="Bravo", discord_id=111, joined="")
+        count, last, reasons = ms._train_stats(history, target, {"vs"})
+        assert count == 2
+        assert last == "2026-05-08"
+        assert reasons == {"vs": 2}
+
+    def test_someone_else_with_the_same_name_does_not_count(self):
+        history = [
+            self._row("2026-05-01", "Bravo", "111"),
+            self._row("2026-05-08", "Bravo", "222"),
+        ]
+        target = ms.Target(name="Bravo", discord_id=111, joined="")
+        assert ms._train_stats(history, target, {"vs"})[0] == 1
+
+    def test_rows_without_an_id_still_match_by_name(self):
+        history = [self._row("2026-05-01", "bravo")]
+        target = ms.Target(name="Bravo", discord_id=111, joined="")
+        assert ms._train_stats(history, target, {"vs"})[0] == 1

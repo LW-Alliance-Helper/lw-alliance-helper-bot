@@ -96,7 +96,7 @@ def test_preview_train_history(seeded_db, test_spreadsheet, monkeypatch):
     meta = _meta(sh, title)
     grid = meta["properties"]["gridProperties"]
     assert (grid.get("frozenRowCount"), grid.get("frozenColumnCount")) == (1, 2)
-    assert "basicFilter" in meta
+    assert "basicFilter" not in meta  # filters are the alliance's to add
     header = meta["data"][0]["rowData"][0]["values"][0]["userEnteredFormat"]
     assert header["textFormat"]["bold"] is True and header["textFormat"]["fontSize"] == 14
     hidden = [bool(c.get("hiddenByUser")) for c in meta["data"][0]["columnMetadata"]]

@@ -49,12 +49,13 @@ def test_number_formats_per_column():
     }
 
 
-def test_frozen_header_and_name_column_and_a_whole_sheet_filter():
+def test_frozen_header_and_name_column_and_no_filter():
     requests = sf.format_requests(5, sf.TabSpec(frozen_columns=2))
     (props,) = _by_kind(requests, "updateSheetProperties")
     assert props["properties"]["gridProperties"] == {"frozenRowCount": 1, "frozenColumnCount": 2}
-    (flt,) = _by_kind(requests, "setBasicFilter")
-    assert flt["filter"]["range"] == {"sheetId": 5}
+    # Filters are the alliance's to add (Kevin, 2026-10-03); the pass never
+    # sets, clears or replaces one.
+    assert not any("Filter" in kind for r in requests for kind in r)
 
 
 def test_header_is_styled():
@@ -89,7 +90,7 @@ def test_a_new_tab_is_formatted_and_marked_once():
     sh, ws = _sheet()
     assert sf.ensure_formatted(ws, sf.TabSpec(), sh=sh) is True
     requests = sh.batch_update.call_args.args[0]["requests"]
-    assert _by_kind(requests, "setBasicFilter")
+    assert _by_kind(requests, "repeatCell")
     (mark,) = _by_kind(requests, "createDeveloperMetadata")
     assert mark["developerMetadata"]["location"] == {"sheetId": 5}
     # The same process never searches again.

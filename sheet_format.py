@@ -8,8 +8,10 @@ Sheet tabs), taken from Kevin's own alliance sheet:
   wrapped rather than widening the column.
 - Body: size 14, black, left-aligned.
 - Frozen header row, and the name column where the tab has one.
-- A filter on every header, set over the whole sheet so a row added later is
-  always inside it.
+- No filter. The tab is for the bot to read; an alliance that wants filters
+  adds its own, and nothing the bot does removes or replaces one (Kevin,
+  2026-10-03). A filter the bot set would stop at the grid's last row when
+  set, so rows the bot later added past it would sit outside.
 - Quantities `#,##0`; identifiers plain text; dates and times in Sheets'
   built-in Date / Time / Date time formats, so each alliance's locale
   renders them.
@@ -137,9 +139,6 @@ def format_requests(sheet_id: int, spec: TabSpec) -> list[dict]:
             }
         }
     )
-    # No row or column bounds: the filter covers the whole sheet, so a row
-    # the bot (or an officer) adds later is never stranded outside it.
-    requests.append({"setBasicFilter": {"filter": {"range": {"sheetId": sheet_id}}}})
     return requests
 
 

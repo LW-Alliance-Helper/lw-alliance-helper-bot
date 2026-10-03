@@ -334,7 +334,7 @@ async def remove_alliance(state, alliance: ad.AllianceKey) -> str:
     def _delete():
         spreadsheet = config.get_spreadsheet(state.guild_id)
         worksheet = ad_setup.ensure_tab(spreadsheet, tab)
-        numbers = ad.plan_remove_alliance(worksheet.get_all_values(), league, alliance)
+        numbers = ad.plan_remove_alliance(ad_setup.read_tab(worksheet), league, alliance)
         ad.apply_row_deletes(worksheet, numbers)
 
     try:
@@ -371,8 +371,11 @@ async def unpair(state, league, opponent: ad.AllianceKey, paired) -> str:
     def _clear():
         spreadsheet = config.get_spreadsheet(state.guild_id)
         worksheet = ad_setup.ensure_tab(spreadsheet, tab)
-        plan = ad.plan_clear_opponent(worksheet.get_all_values(), keys, opponent)
+        values = ad_setup.read_tab(worksheet)
+        plan = ad.plan_clear_opponent(values, keys, opponent)
         ad.apply_upsert(worksheet, plan)
+        if values:
+            ad_setup.after_write(worksheet, values[0])
 
     try:
         await asyncio.to_thread(_clear)

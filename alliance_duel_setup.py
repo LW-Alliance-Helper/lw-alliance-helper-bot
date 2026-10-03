@@ -29,6 +29,8 @@ import discord
 
 import alliance_duel as ad
 import config_health
+import sheet_format
+import sheet_identity
 from premium import PREMIUM_BRAND
 from setup_hub import HUB_BTN_VS
 
@@ -211,6 +213,45 @@ def ensure_tab(spreadsheet, tab_name: str = "Alliance Duel (VS)"):
     )
 
 
+#: Where Week Date sits in the header the bot writes. Read against first, so a
+#: tab nobody reordered reads in two calls rather than three.
+_DEFAULT_FORMAT = ad.tab_format(ad.SHEET_COLUMNS)
+
+
+def read_tab(worksheet) -> list[list[str]]:
+    """The tab's cells as shown, with Week Date as ``YYYY-MM-DD`` (#729).
+
+    Every VS read goes through here. Week Date carries Sheets' Date format,
+    so its text is the alliance's locale (``28/09/2026`` in some), which
+    `parse_week_date` can't tell from a US date; it is read unformatted
+    instead (`sheet_format.read_values`). Every other cell reads exactly as
+    shown, because the tab holds the alliance's own columns and typed values
+    too. Week Date is found by its header: the read assumes the bot's layout,
+    and reads again by the real header when an officer has moved it."""
+    values = sheet_format.read_values(worksheet, _DEFAULT_FORMAT, keep_text=True)
+    spec = ad.tab_format(values[0] if values else ad.SHEET_COLUMNS)
+    if spec.date != _DEFAULT_FORMAT.date:
+        values = sheet_format.read_values(worksheet, spec, keep_text=True)
+    return values
+
+
+def before_write(worksheet, header, guild_id: int) -> None:
+    """Make Picked By a Discord ID column before anything is written to it
+    (#729): tagged, so the alliance's show / hide choice reaches it, and
+    plain text, so an 18-digit ID typed in with ``USER_ENTERED`` is never
+    rounded. Once per tab per process; best-effort."""
+    idx = ad.picked_by_column(header)
+    if idx >= 0:
+        sheet_identity.adopt_columns(worksheet, [idx], guild_id=guild_id)
+
+
+def after_write(worksheet, header) -> None:
+    """Put the tab in the house style once, after a write succeeded (#729):
+    frozen header, full numbers, Week Date as a date, and dropdowns of the
+    words on the result, Picked and Intent columns. Never fails the write."""
+    sheet_format.ensure_formatted(worksheet, ad.tab_format(header))
+
+
 def load_rows(guild_id: int, tab_name: str = "Alliance Duel (VS)"):
     """Read and parse the guild's VS tab, or ``None`` if it can't be reached.
 
@@ -229,7 +270,7 @@ def load_rows(guild_id: int, tab_name: str = "Alliance Duel (VS)"):
     try:
         spreadsheet = config.get_spreadsheet(guild_id)
         worksheet = ensure_tab(spreadsheet, tab_name)
-        values = worksheet.get_all_values()
+        values = read_tab(worksheet)
     except Exception as e:  # noqa: BLE001 - classified by config_health
         recorded = config_health.record_sheet_failure(guild_id, VS_SHEET_SUBJECT, e, tab=tab_name)
         logger.warning(
@@ -290,7 +331,7 @@ def column_guide_embed(tracking_mode: str = ad.MODE_FULL_BRACKET) -> discord.Emb
             "in-game points, for your own matchups. Type the full number or "
             "use a unit (`500m`, `1.2b`); a bare `500` means five hundred.\n"
             f"**{ad.day_outcome_col(1)}** to **{ad.day_outcome_col(6)}** are "
-            "`W` or `L`. "
+            "`Win` or `Lose`. "
             f"**{ad.COL_WEEK_SCORE}** is your league points out of 13."
         ),
         inline=False,
@@ -301,7 +342,8 @@ def column_guide_embed(tracking_mode: str = ad.MODE_FULL_BRACKET) -> discord.Emb
             f"**{ad.COL_KNOWN_1_5}** and **{ad.COL_KNOWN_6}** hold your own "
             "judgment of an alliance: "
             f"`{'` / `'.join(ad.KNOWN_SCALE)}`.\n"
-            f"**{ad.COL_PICKED}** is your call on one week's match. "
+            f"**{ad.COL_PICKED}** is your call on one week's match: "
+            "`Win` or `Lose` for the alliance on that row. "
             f"**{ad.COL_NOTES}** is free text."
         ),
         inline=False,

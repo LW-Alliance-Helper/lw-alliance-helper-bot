@@ -924,6 +924,7 @@ async def _append_blank_rows(guild_id: int, tab_name: str, league, missing) -> i
                 lines.append(ad.blank_bracket_values(header, league, week, stamp))
         if lines:
             worksheet.append_rows(lines, value_input_option="USER_ENTERED")
+            ads.after_write(worksheet, header)
         config_health.clear(guild_id, ads.VS_SHEET_SUBJECT)
         return len(lines)
 

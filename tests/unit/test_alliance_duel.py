@@ -339,7 +339,123 @@ def test_plan_upsert_touches_only_the_matched_rows_own_cells():
     written_rows = {u.a1.lstrip("ABCDEFGHIJKLMNOPQRSTUVWXYZ") for u in plan.updates}
     assert written_rows == {"2"}  # row 3 (the neighbour) is never addressed
     outcome_col = ad.transfer.col_index_to_letter(headers.index(ad.COL_WEEK_OUTCOME))
-    assert ad.CellUpdate(f"{outcome_col}2", "W") in plan.updates
+    assert ad.CellUpdate(f"{outcome_col}2", "Win") in plan.updates
+
+
+# ── Words and the house style (#729) ──────────────────────────────────────────
+
+
+def test_results_picks_and_intents_are_written_as_words():
+    row = _row(
+        1,
+        0,
+        1,
+        day_outcomes={1: "W", 6: "L"},
+        week_outcome="L",
+        picked="W",
+        picked_by="100000000000000001",
+        intent=ad.INTENT_SAVE,
+    )
+    out = ad.row_values(row)
+    assert out[ad.day_outcome_col(1)] == "Win"
+    assert out[ad.day_outcome_col(6)] == "Lose"
+    assert out[ad.COL_WEEK_OUTCOME] == "Lose"
+    assert out[ad.COL_PICKED] == "Win"
+    assert out[ad.COL_PICKED_BY] == "100000000000000001"
+    assert out[ad.COL_INTENT] == "Save for a later week"
+    assert ad.row_values(_row(1, 0, 1, intent=ad.INTENT_PUSH))[ad.COL_INTENT] == "Push to win"
+
+
+def test_a_cleared_declaration_writes_a_blank_intent_cell():
+    # The one blank the upsert writes: clearing must empty the cell, or the
+    # old word would read straight back.
+    out = ad.row_values(_row(1, 0, 1, intent=ad.INTENT_NONE))
+    assert out[ad.COL_INTENT] == ""
+    # And a row that says nothing about intent still leaves the cell alone.
+    assert ad.COL_INTENT not in ad.row_values(_row(1, 0, 1))
+
+
+def test_clearing_overwrites_a_declared_intent_on_the_tab():
+    mine = _identified()
+    _cell(mine, ad.COL_TIER, LEAGUE.tier)
+    _cell(mine, ad.COL_GROUP, LEAGUE.group)
+    _cell(mine, ad.COL_TAG, "AL00")
+    _cell(mine, ad.COL_INTENT, "Push to win")
+    plan = ad.plan_upsert(_grid(mine), [_row(1, 0, intent=ad.INTENT_NONE)])
+    col = ad.transfer.col_index_to_letter(list(ad.SHEET_COLUMNS).index(ad.COL_INTENT))
+    assert ad.CellUpdate(f"{col}2", "") in plan.updates
+
+
+@pytest.mark.parametrize(
+    "cell, code",
+    [("Win", "W"), ("win", "W"), ("W", "W"), ("Lose", "L"), ("LOSE", "L"), ("L", "L"), ("", None)],
+)
+def test_outcome_cells_read_the_words_and_the_old_codes(cell, code):
+    assert ad.parse_outcome(cell) == code
+
+
+@pytest.mark.parametrize(
+    "cell, code",
+    [
+        ("Push to win", ad.INTENT_PUSH),
+        ("push", ad.INTENT_PUSH),
+        ("Save for a later week", ad.INTENT_SAVE),
+        ("SAVE", ad.INTENT_SAVE),
+        ("none", ad.INTENT_NONE),
+        ("", None),
+    ],
+)
+def test_intent_cells_read_the_words_and_the_old_codes(cell, code):
+    assert ad.parse_intent(cell) == code
+
+
+def test_old_coded_rows_and_worded_rows_parse_the_same():
+    old, new = _identified(tag="AL01"), _identified(tag="AL02")
+    for row, words in (
+        (old, ("W", "L", "W", "push")),
+        (new, ("Win", "Lose", "Win", "Push to win")),
+    ):
+        _cell(row, ad.day_outcome_col(1), words[0])
+        _cell(row, ad.COL_WEEK_OUTCOME, words[1])
+        _cell(row, ad.COL_PICKED, words[2])
+        _cell(row, ad.COL_INTENT, words[3])
+    a, b = ad.parse_rows(_grid(old, new))
+    for parsed in (a, b):
+        assert parsed.day_outcomes == {1: "W"}
+        assert parsed.week_outcome == "L"
+        assert parsed.picked == "W"
+        assert parsed.intent == ad.INTENT_PUSH
+
+
+def test_the_intent_words_are_the_declaration_buttons():
+    import alliance_duel_entry as entry
+
+    assert ad.INTENT_SHEET_WORDS.word(ad.INTENT_PUSH) == entry.VS_BTN_PUSH
+    assert ad.INTENT_SHEET_WORDS.word(ad.INTENT_SAVE) == entry.VS_BTN_SAVE
+
+
+def test_tab_format_finds_every_column_by_its_header():
+    spec = ad.tab_format(ad.SHEET_COLUMNS)
+    h = list(ad.SHEET_COLUMNS)
+    assert spec.date == (h.index(ad.COL_WEEK_DATE),)
+    assert spec.text == (h.index(ad.COL_PICKED_BY),)
+    assert set(spec.quantity) == {h.index(c) for c in ad.QUANTITY_COLUMNS}
+    assert len(spec.quantity) == 9  # Power, Members, six day scores, Week Score
+    assert spec.frozen_columns == 0
+    dropdowns = dict(spec.dropdowns)
+    for name in (*(ad.day_outcome_col(d) for d in range(1, 7)), ad.COL_WEEK_OUTCOME, ad.COL_PICKED):
+        assert dropdowns[h.index(name)] == ("Win", "Lose")
+    assert dropdowns[h.index(ad.COL_INTENT)] == ("Push to win", "Save for a later week")
+    assert ad.picked_by_column(h) == h.index(ad.COL_PICKED_BY)
+
+
+def test_tab_format_follows_a_moved_column_and_skips_a_missing_one():
+    header = ["My Column", ad.COL_TAG, ad.COL_WEEK_DATE, ad.COL_SEASON, ad.COL_PICKED]
+    spec = ad.tab_format(header)
+    assert spec.date == (2,)
+    assert spec.text == () and spec.quantity == ()
+    assert dict(spec.dropdowns) == {4: ("Win", "Lose")}
+    assert ad.picked_by_column(header) == -1
 
 
 def test_plan_upsert_never_writes_a_column_the_caller_has_nothing_for():

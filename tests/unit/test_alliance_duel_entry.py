@@ -2204,6 +2204,46 @@ async def test_a_tab_missing_a_column_still_contributes_to_the_shared_record(
     assert _central.weeks_for_alliance(OWN)[0]["week_score"] == 7
 
 
+@pytest.mark.asyncio
+async def test_a_save_makes_picked_by_text_first_and_formats_after(
+    _sheet_takes_it, _central, monkeypatch
+):
+    """#729: Picked By is adopted as a text ID column before an 18-digit ID
+    lands in it (a number cell would round it), and the house style goes on
+    only once the write has succeeded."""
+    calls = []
+    monkeypatch.setattr(
+        entry.ad_setup, "before_write", lambda ws, header, gid: calls.append(("before", gid))
+    )
+    monkeypatch.setattr(entry.ad, "apply_upsert", lambda *a, **k: calls.append(("write",)))
+    monkeypatch.setattr(
+        entry.ad_setup, "after_write", lambda ws, header: calls.append(("after", tuple(header)))
+    )
+    state = _state(_bracket())
+
+    problem = await entry.save_rows(state, [_row(OWN_TAG, week_score=7)])
+
+    assert problem == ""
+    assert calls == [
+        ("before", state.guild_id),
+        ("write",),
+        ("after", tuple(ad.SHEET_COLUMNS)),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_write_is_never_formatted(_sheet_takes_it, _central, monkeypatch):
+    formatted = []
+    monkeypatch.setattr(entry.ad_setup, "after_write", lambda *a: formatted.append(a))
+    monkeypatch.setattr(
+        entry.ad, "apply_upsert", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("tab gone"))
+    )
+
+    problem = await entry.save_rows(_state(_bracket()), [_row(OWN_TAG, week_score=7)])
+
+    assert problem and formatted == []
+
+
 def _stored_week(vsdb, week: int) -> list:
     """Every stored row for this week number, whoever recorded it."""
     with vsdb._get_conn() as conn:

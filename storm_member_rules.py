@@ -78,6 +78,12 @@ _TEAMS = ("A", "B")
 # Existing rules with name subjects keep working unchanged — render_label
 # falls back to the raw subject when it isn't numeric, and the
 # auto-fill / apply paths already accept both forms.
+#
+# A typed name is only as good as the name staying the same, so every rule
+# row also carries the member's Discord ID in its own column (#723), filled
+# from the roster when the rule is saved (or first read). `list_rules`
+# hands back a rule whose ID column holds a Discord ID with that ID as its
+# subject, so every consumer above matches it by ID.
 
 _SUBJECT_REQUIRED_MSG = (
     "⚠️ Provide a member. Pick from the typeahead (server member) OR "
@@ -201,16 +207,23 @@ def _get_or_create_rules_worksheet(guild_id: int, event_type: str):
 class Rule:
     """One member rule row. Discriminated by `rule_type`."""
 
-    __slots__ = ("rule_type", "subject", "sub_type", "value", "notes")
+    __slots__ = ("rule_type", "subject", "sub_type", "value", "notes", "discord_id")
 
     def __init__(
-        self, rule_type: str, subject: str, value: str, sub_type: str = "", notes: str = ""
+        self,
+        rule_type: str,
+        subject: str,
+        value: str,
+        sub_type: str = "",
+        notes: str = "",
+        discord_id: str = "",
     ):
         self.rule_type = rule_type
         self.subject = subject
         self.sub_type = sub_type or ""
         self.value = value
         self.notes = notes or ""
+        self.discord_id = discord_id or ""
 
     def render_label(self, *, guild=None) -> str:
         """Human-readable single-line summary for embed listings.
@@ -297,6 +310,9 @@ def list_rules(guild_id: int, event_type: str) -> list[Rule]:
         return []
 
     header = [c.strip() for c in values[0]]
+    import sheet_identity
+
+    id_col = sheet_identity.locate_column(ws, header)
 
     def _col(name: str) -> int:
         try:
@@ -309,6 +325,10 @@ def list_rules(guild_id: int, event_type: str) -> list[Rule]:
     subtype_col = _col("Sub-Type")
     value_col = _col("Value")
     notes_col = _col("Notes")
+    if subject_col >= 0:
+        sheet_identity.maybe_stamp(
+            ws, values[1:], guild_id=guild_id, name_col=subject_col, id_col=id_col
+        )
 
     def _cell(row: list[str], idx: int) -> str:
         if idx < 0 or idx >= len(row):
@@ -349,13 +369,19 @@ def list_rules(guild_id: int, event_type: str) -> list[Rule]:
             )
         ):
             value = _translate_legacy_cs_zone(value)
+        subject = _cell(row, subject_col)
+        identity = _cell(row, id_col)
+        if rule_type == _RULE_TYPE_PER_MEMBER and identity.isdigit():
+            # Matched by Discord ID from here on, whatever the row's name.
+            subject = identity
         rules.append(
             Rule(
                 rule_type=rule_type,
-                subject=_cell(row, subject_col),
+                subject=subject,
                 sub_type=sub_type,
                 value=value,
                 notes=_cell(row, notes_col),
+                discord_id=identity,
             )
         )
     return rules
@@ -375,20 +401,43 @@ def _rows_equivalent(rule: Rule, candidate: Rule) -> bool:
 
 def save_rule(guild_id: int, event_type: str, rule: Rule) -> tuple[bool, str]:
     """Append a rule row. Returns (ok, message). Rejects duplicates per
-    `_rows_equivalent`. Caller can `delete_rule_at` first to update."""
+    `_rows_equivalent`. Caller can `delete_rule_at` first to update.
+
+    A per-member rule's row carries the member's Discord ID (#723): the
+    picked member's own, or the roster's for a typed name. The duplicate
+    check compares by that ID, as `list_rules` reads rules back."""
+    import sheet_identity
+
+    identity = ""
+    if rule.rule_type == _RULE_TYPE_PER_MEMBER:
+        identity = rule.subject.strip()
+        if not identity.isdigit():
+            identity = sheet_identity.load_roster(guild_id).id_for(identity)
+    as_read = Rule(
+        rule.rule_type,
+        identity if identity.isdigit() else rule.subject,
+        rule.value,
+        rule.sub_type,
+        rule.notes,
+    )
     existing = list_rules(guild_id, event_type)
     for r in existing:
-        if _rows_equivalent(r, rule):
+        if _rows_equivalent(r, as_read):
             return False, "A matching rule already exists. Clear it first to update."
 
     ws = _get_or_create_rules_worksheet(guild_id, event_type)
     if ws is None:
         return False, NOT_SET_UP
+    row = [rule.rule_type, rule.subject, rule.sub_type, rule.value, rule.notes]
+    if rule.rule_type == _RULE_TYPE_PER_MEMBER:
+        try:
+            header = ws.row_values(1)
+        except Exception:
+            header = list(_HEADER)
+        id_col = sheet_identity.ensure_column(ws, header, guild_id=guild_id)
+        sheet_identity.set_cell(row, id_col, identity)
     try:
-        ws.append_row(
-            [rule.rule_type, rule.subject, rule.sub_type, rule.value, rule.notes],
-            value_input_option="RAW",
-        )
+        ws.append_row(row, value_input_option="RAW")
     except Exception as e:
         logger.warning(
             "[STORM RULES] save_rule failed for guild=%s event=%s: %s", guild_id, event_type, e

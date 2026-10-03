@@ -39,6 +39,9 @@ from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 
 import config_health
+import sheet_format
+import sheet_identity
+from sheet_words import Words, rename_headers
 
 # ── Day-of-week ──────────────────────────────────────────────────────────────
 # Index matches datetime.date.weekday(): 0 = Monday … 6 = Sunday. Stored in the
@@ -194,11 +197,13 @@ BIRTHDAY_DISABLED = "disabled"  # birthdays don't drive train selection (default
 BIRTHDAY_MODES = [BIRTHDAY_OVERRIDE, BIRTHDAY_DISABLED]
 
 # ── Sheet headers ────────────────────────────────────────────────────────────
-# "Discord ID" is appended (not inserted) so existing six-column sheets keep
-# working untouched — old rows just have a blank seventh cell. It's the
-# identity key (name is the fallback) so a renamed member keeps one record.
-HISTORY_HEADER = ["Date", "Member", "Reason", "Status", "Posted At", "Notes", "Discord ID"]
-MEMBER_RULES_HEADER = ["Member", "Rule Type", "Value", "Notes"]
+# Each tab also carries a Discord ID column (#723), the identity key with the
+# name as the fallback, so a renamed member keeps one record. It isn't in
+# these headers: `sheet_identity` adds it, tags it and finds it by its tag,
+# wherever it sits. Train History tabs from before #723 already have one,
+# headed "Discord ID" in the seventh column, and keep it.
+HISTORY_HEADER = ["Date", "Member", "Reason", "Status", "Posted At (server time)", "Notes"]
+MEMBER_RULES_HEADER = ["Member", "Rule Type", "Skip Until", "Notes"]
 DAY_RULES_HEADER = [
     "Preset Name",
     "Day of Week",
@@ -206,6 +211,78 @@ DAY_RULES_HEADER = [
     "Specific Member",
     "Notes",
 ]
+
+# ── Words in the cells (#729) ────────────────────────────────────────────────
+# The tabs hold the words Discord shows, never the codes above. Each reads
+# back the code from the word, the old code or the other label Discord uses,
+# in any case, so rows written before #729 keep working, and a tab's rows
+# are reworded the next time the bot rewrites it.
+
+REASON_WORDS = Words(
+    {
+        "auto": RULE_LABELS_SHORT[RULE_AUTO],
+        "leadership": RULE_LABELS_SHORT[RULE_LEADERSHIP],
+        "manual": RULE_LABELS_SHORT[RULE_MANUAL],
+        "vs": RULE_LABELS_SHORT[RULE_VS],
+        "contest": RULE_LABELS_SHORT[RULE_CONTEST],
+        "event": RULE_LABELS_SHORT[RULE_EVENT],
+        "birthday": RULE_LABELS_SHORT[RULE_BIRTHDAY],
+        "welcome": "Welcome",
+        "other": "Other",
+    },
+    also={RULE_LABELS[rule]: reason for rule, reason in RULE_TO_REASON.items()},
+)
+STATUS_WORDS = Words({STATUS_SCHEDULED: "Scheduled", STATUS_POSTED: "Posted"})
+MEMBER_RULE_WORDS = Words(
+    {MEMBER_RULE_OPT_OUT: "Opted out", MEMBER_RULE_SKIP_UNTIL: "Skipped until"},
+    also={"opt out": MEMBER_RULE_OPT_OUT, "skip until": MEMBER_RULE_SKIP_UNTIL},
+)
+DAY_RULE_WORDS = Words(
+    {rule: RULE_LABELS[rule] for rule in DAY_RULE_TYPES},
+    also={RULE_LABELS_SHORT[rule]: rule for rule in DAY_RULE_TYPES},
+)
+
+
+@dataclass(frozen=True)
+class _Layout:
+    """One tab's header, house-style format, words per column, and the old
+    headers it renames (only while a header cell still holds the old text)."""
+
+    header: tuple[str, ...]
+    format: sheet_format.TabSpec
+    words: tuple[tuple[int, Words], ...] = ()
+    renames: tuple[tuple[str, str], ...] = ()
+
+
+HISTORY_LAYOUT = _Layout(
+    header=tuple(HISTORY_HEADER),
+    format=sheet_format.TabSpec(
+        date=(0,),
+        datetime=(4,),
+        frozen_columns=2,
+        dropdowns=((2, REASON_WORDS.options), (3, STATUS_WORDS.options)),
+    ),
+    words=((2, REASON_WORDS), (3, STATUS_WORDS)),
+    renames=(("Posted At", "Posted At (server time)"),),
+)
+MEMBER_RULES_LAYOUT = _Layout(
+    header=tuple(MEMBER_RULES_HEADER),
+    format=sheet_format.TabSpec(
+        date=(2,), frozen_columns=1, dropdowns=((1, MEMBER_RULE_WORDS.options),)
+    ),
+    words=((1, MEMBER_RULE_WORDS),),
+    renames=(("Value", "Skip Until"),),
+)
+DAY_RULES_LAYOUT = _Layout(
+    header=tuple(DAY_RULES_HEADER),
+    format=sheet_format.TabSpec(
+        frozen_columns=1,
+        dropdowns=((1, tuple(WEEKDAY_NAMES)), (2, DAY_RULE_WORDS.options)),
+    ),
+    words=((2, DAY_RULE_WORDS),),
+)
+# Kept for the preview test and any caller that formats History directly.
+HISTORY_FORMAT = HISTORY_LAYOUT.format
 
 DEFAULT_PRESET_NAME = "Standard Week"
 
@@ -262,7 +339,7 @@ class HistoryRow:
     member: str
     reason: str
     status: str
-    posted_at: str = ""
+    posted_at: str = ""  # server time, `YYYY-MM-DD HH:MM:SS` (time_helpers.server_stamp)
     notes: str = ""
     discord_id: str = ""  # identity key; blank → match by name (older / hand-typed rows)
 
@@ -275,6 +352,7 @@ class MemberRule:
     rule_type: str
     value: str = ""
     notes: str = ""
+    discord_id: str = ""  # identity key; blank → match by name
 
 
 @dataclass
@@ -947,9 +1025,10 @@ def load_roster_members(guild_id: int) -> list[dict]:
         Display Name, falls back to Name. The IDs power role-scoped day pools
         and rename-proof history.
       - Sync OFF (free / no sync): a hand-maintained roster the alliance
-        pointed us at. We read ONLY the name column — no IDs, no display
-        column — because free tier never needs them (full-roster rotation
-        works on names alone).
+        pointed us at. We read the name column, no display column, plus
+        each member's Discord ID from wherever the alliance told /setup it
+        keeps them (`sheet_identity.load_roster`), so a rename keeps one
+        record.
 
     Returns [] when the config read or the Sheet read fails — callers degrade
     to an empty pool gracefully."""
@@ -992,12 +1071,14 @@ def load_roster_members(guild_id: int) -> list[dict]:
                 continue
             out.append({"name": name, "discord_id": _cell(row, id_col)})
     else:
-        # Free name-only pointer: read just the name column, no Discord IDs.
+        # Free pointer: the name column, plus the Discord ID the alliance
+        # keeps for each member, when they told /setup where (#723).
+        ids = sheet_identity.load_roster(guild_id)
         for row in values[1:]:  # row 1 is the header
             name = _cell(row, name_col)
             if not name:
                 continue
-            out.append({"name": name, "discord_id": ""})
+            out.append({"name": name, "discord_id": ids.id_for(name)})
     return out
 
 
@@ -1006,18 +1087,13 @@ def roster_names(roster: list[dict]) -> list[str]:
     return [m["name"] for m in roster if m.get("name")]
 
 
-def roster_id_map(guild_id: int) -> dict[str, str]:
-    """Norm-name → Discord ID for the alliance roster.
-
-    Used to stamp the Discord ID on history rows the bot writes, so a member's
-    record survives a later display-name change (the ID becomes the match key,
-    the name the fallback). A name not on the roster maps to "" — name-only, as
-    before."""
-    return {
-        _norm(m["name"]): str(m.get("discord_id") or "")
-        for m in load_roster_members(guild_id)
-        if m.get("name")
-    }
+def _id_column(ws, values: list[list[str]], guild_id: int, *, add: bool) -> int:
+    """The tab's Discord ID column (#723). A writer (`add=True`) adds one if the
+    tab has none; a reader only looks, so reading never changes the tab."""
+    header = list(values[0]) if values else []
+    if add:
+        return sheet_identity.ensure_column(ws, header, guild_id=guild_id)
+    return sheet_identity.locate_column(ws, header)
 
 
 def role_pool_from_roster(roster: list[dict], role_discord_ids: set[str]) -> list[str]:
@@ -1036,15 +1112,21 @@ def role_pool_from_roster(roster: list[dict], role_discord_ids: set[str]) -> lis
 def load_history(guild_id: int, tab_name: str) -> list[HistoryRow]:
     """Load every Train History row. Returns [] on any read failure (the
     callers degrade gracefully — an empty history just means everyone starts
-    at rotation count zero)."""
+    at rotation count zero).
+
+    Rows written before #723 get their Discord ID from the roster as they are
+    read (at most every half hour), so a member who renames later still
+    matches their past drives."""
     ws = _open_tab(guild_id, tab_name, HISTORY_HEADER)
     if ws is None:
         return []
     try:
-        values = ws.get_all_values()
+        values = _read(ws, HISTORY_LAYOUT)
     except Exception as e:
         print(f"[TRAIN ROTATION] load_history read failed for guild {guild_id}: {e}")
         return []
+    id_col = _id_column(ws, values, guild_id, add=False)
+    sheet_identity.maybe_stamp(ws, values[1:], guild_id=guild_id, name_col=1, id_col=id_col)
     out: list[HistoryRow] = []
     for row in values[1:]:
         if not row or not _cell(row, 0):
@@ -1053,18 +1135,39 @@ def load_history(guild_id: int, tab_name: str) -> list[HistoryRow]:
             HistoryRow(
                 date=_cell(row, 0),
                 member=_cell(row, 1),
-                reason=_cell(row, 2).lower(),
-                status=_cell(row, 3).lower(),
+                reason=REASON_WORDS.code(_cell(row, 2)) if _cell(row, 2) else "",
+                status=STATUS_WORDS.code(_cell(row, 3)) if _cell(row, 3) else "",
                 posted_at=_cell(row, 4),
                 notes=_cell(row, 5),
-                discord_id=_cell(row, 6),
+                discord_id=sheet_identity.cell(row, id_col),
             )
         )
     return out
 
 
-def _history_to_row(h: HistoryRow) -> list[str]:
-    return [h.date, h.member, h.reason, h.status, h.posted_at, h.notes, h.discord_id]
+def _by_date(rows: list[list[str]]) -> list[list[str]]:
+    """Train History rows in date order, oldest first (#729): a dated log an
+    officer reads top to bottom. A date the bot can't read (typed by hand in
+    some other shape) keeps its place among the others like it, at the end."""
+
+    def key(row: list[str]):
+        when = _parse_iso(_cell(row, 0))
+        return (0, when) if when else (1, date.min)
+
+    return sorted(rows, key=key)
+
+
+def _history_to_row(h: HistoryRow, id_col: int) -> list[str]:
+    row = [
+        h.date,
+        h.member,
+        REASON_WORDS.word(h.reason) if h.reason else "",
+        STATUS_WORDS.word(h.status),
+        h.posted_at,
+        h.notes,
+    ]
+    sheet_identity.set_cell(row, id_col, h.discord_id)
+    return row
 
 
 def write_draft_rows(guild_id: int, tab_name: str, draft: list[DraftDay]) -> bool:
@@ -1080,16 +1183,17 @@ def write_draft_rows(guild_id: int, tab_name: str, draft: list[DraftDay]) -> boo
     if ws is None:
         return False
     try:
-        values = ws.get_all_values()
+        values = _read(ws, HISTORY_LAYOUT)
     except Exception as e:
         print(f"[TRAIN ROTATION] write_draft read-back failed for guild {guild_id}: {e}")
         return False
 
-    id_map = roster_id_map(guild_id)
+    id_col = _id_column(ws, values, guild_id, add=True)
+    roster = sheet_identity.load_roster(guild_id)
     draft_dates = {dd.date for dd in draft}
 
     def _posted(row) -> bool:
-        return _cell(row, 3).lower() == STATUS_POSTED
+        return STATUS_WORDS.code(_cell(row, 3)) == STATUS_POSTED
 
     posted_dates = {_cell(row, 0) for row in values[1:] if _posted(row)} & draft_dates
     kept = [
@@ -1106,13 +1210,15 @@ def write_draft_rows(guild_id: int, tab_name: str, draft: list[DraftDay]) -> boo
                 status=STATUS_SCHEDULED,
                 posted_at="",
                 notes=dd.note,
-                discord_id=id_map.get(_norm(dd.member or ""), ""),
-            )
+                discord_id=roster.id_for(dd.member or ""),
+            ),
+            id_col,
         )
         for dd in draft
         if dd.date not in posted_dates
     ]
-    return _rewrite(ws, HISTORY_HEADER, kept + new_rows, guild_id, tab_name)
+    sheet_identity.fill_ids(kept, name_col=1, id_col=id_col, roster=roster)
+    return _rewrite(ws, HISTORY_LAYOUT, values, _by_date(kept + new_rows), guild_id, tab_name)
 
 
 def set_day_status(
@@ -1135,11 +1241,13 @@ def set_day_status(
     if ws is None:
         return False
     try:
-        values = ws.get_all_values()
+        values = _read(ws, HISTORY_LAYOUT)
     except Exception as e:
         print(f"[TRAIN ROTATION] set_day_status read-back failed for guild {guild_id}: {e}")
         return False
 
+    id_col = _id_column(ws, values, guild_id, add=True)
+    roster = sheet_identity.load_roster(guild_id)
     new_row = _history_to_row(
         HistoryRow(
             date=date_iso,
@@ -1148,8 +1256,9 @@ def set_day_status(
             status=status,
             posted_at=posted_at,
             notes=notes,
-            discord_id=roster_id_map(guild_id).get(_norm(member), ""),
-        )
+            discord_id=roster.id_for(member),
+        ),
+        id_col,
     )
     body = values[1:]
     replaced = False
@@ -1164,31 +1273,43 @@ def set_day_status(
             out.append(row)
     if not replaced:
         out.append(new_row)
-    return _rewrite(ws, HISTORY_HEADER, out, guild_id, tab_name)
+    sheet_identity.fill_ids(out, name_col=1, id_col=id_col, roster=roster)
+    return _rewrite(ws, HISTORY_LAYOUT, values, _by_date(out), guild_id, tab_name)
 
 
 # ── Train Member Rules ───────────────────────────────────────────────────────
 
 
 def load_member_rules(guild_id: int, tab_name: str) -> list[MemberRule]:
+    """Every member rule, under the member's current roster name.
+
+    A rule is matched to its member by Discord ID first, then by name (#723):
+    a rule whose ID is on the roster is returned under that member's name
+    today, so an opt-out keeps applying after a rename. Rules written before
+    the ID column get their ID from the roster as they are read."""
     ws = _open_tab(guild_id, tab_name, MEMBER_RULES_HEADER)
     if ws is None:
         return []
     try:
-        values = ws.get_all_values()
+        values = _read(ws, MEMBER_RULES_LAYOUT)
     except Exception as e:
         print(f"[TRAIN ROTATION] load_member_rules failed for guild {guild_id}: {e}")
         return []
+    id_col = _id_column(ws, values, guild_id, add=False)
+    sheet_identity.maybe_stamp(ws, values[1:], guild_id=guild_id, name_col=0, id_col=id_col)
+    roster = sheet_identity.load_roster(guild_id) if id_col >= 0 else sheet_identity.Roster()
     out: list[MemberRule] = []
     for row in values[1:]:
         if not row or not _cell(row, 0):
             continue
+        identity = sheet_identity.cell(row, id_col)
         out.append(
             MemberRule(
-                member=_cell(row, 0),
-                rule_type=_cell(row, 1).lower(),
+                member=roster.current_name(_cell(row, 0), identity),
+                rule_type=MEMBER_RULE_WORDS.code(_cell(row, 1)),
                 value=_cell(row, 2),
                 notes=_cell(row, 3),
+                discord_id=identity,
             )
         )
     return out
@@ -1202,53 +1323,66 @@ def set_member_rule(
     value: str = "",
     notes: str = "",
 ) -> bool:
-    """Upsert a member rule keyed by (member, rule_type)."""
+    """Upsert a member rule keyed by (member, rule_type), the member matched
+    by Discord ID first, then name."""
     ws = _open_tab(guild_id, tab_name, MEMBER_RULES_HEADER)
     if ws is None:
         return False
     try:
-        values = ws.get_all_values()
+        values = _read(ws, MEMBER_RULES_LAYOUT)
     except Exception as e:
         print(f"[TRAIN ROTATION] set_member_rule read-back failed for guild {guild_id}: {e}")
         return False
-    target = (_norm(member), rule_type.lower())
-    new_row = [member, rule_type.lower(), value, notes]
+    id_col = _id_column(ws, values, guild_id, add=True)
+    roster = sheet_identity.load_roster(guild_id)
+    identity = roster.id_for(member)
+    rule_type = MEMBER_RULE_WORDS.code(rule_type)
+    new_row = [member, MEMBER_RULE_WORDS.word(rule_type), value, notes]
+    sheet_identity.set_cell(new_row, id_col, identity)
     out: list[list[str]] = []
     replaced = False
     for row in values[1:]:
         if not _cell(row, 0):
             continue
-        if (_norm(_cell(row, 0)), _cell(row, 1).lower()) == target and not replaced:
+        same = sheet_identity.same_member(
+            _cell(row, 0), sheet_identity.cell(row, id_col), member, identity
+        )
+        if same and MEMBER_RULE_WORDS.code(_cell(row, 1)) == rule_type and not replaced:
             out.append(new_row)
             replaced = True
         else:
             out.append(row)
     if not replaced:
         out.append(new_row)
-    return _rewrite(ws, MEMBER_RULES_HEADER, out, guild_id, tab_name)
+    sheet_identity.fill_ids(out, name_col=0, id_col=id_col, roster=roster)
+    return _rewrite(ws, MEMBER_RULES_LAYOUT, values, out, guild_id, tab_name)
 
 
 def clear_member_rule(
     guild_id: int, tab_name: str, member: str, rule_type: str | None = None
 ) -> bool:
-    """Remove a member's rule(s). `rule_type=None` clears all rules for them."""
+    """Remove a member's rule(s). `rule_type=None` clears all rules for them.
+    `member` is the name the bot shows (the roster's current one); a row
+    still under an old name is found by its Discord ID."""
     ws = _open_tab(guild_id, tab_name, MEMBER_RULES_HEADER)
     if ws is None:
         return False
     try:
-        values = ws.get_all_values()
+        values = _read(ws, MEMBER_RULES_LAYOUT)
     except Exception as e:
         print(f"[TRAIN ROTATION] clear_member_rule read-back failed for guild {guild_id}: {e}")
         return False
-    key = _norm(member)
-    rt = rule_type.lower() if rule_type else None
-    out = [
-        row
-        for row in values[1:]
-        if _cell(row, 0)
-        and not (_norm(_cell(row, 0)) == key and (rt is None or _cell(row, 1).lower() == rt))
-    ]
-    return _rewrite(ws, MEMBER_RULES_HEADER, out, guild_id, tab_name)
+    id_col = _id_column(ws, values, guild_id, add=False)
+    identity = sheet_identity.load_roster(guild_id).id_for(member) if id_col >= 0 else ""
+    rt = MEMBER_RULE_WORDS.code(rule_type) if rule_type else None
+
+    def _theirs(row) -> bool:
+        return sheet_identity.same_member(
+            _cell(row, 0), sheet_identity.cell(row, id_col), member, identity
+        ) and (rt is None or MEMBER_RULE_WORDS.code(_cell(row, 1)) == rt)
+
+    out = [row for row in values[1:] if _cell(row, 0) and not _theirs(row)]
+    return _rewrite(ws, MEMBER_RULES_LAYOUT, values, out, guild_id, tab_name)
 
 
 # ── Train Day Rules (multi-preset) ───────────────────────────────────────────
@@ -1301,6 +1435,10 @@ def load_preset(guild_id: int, tab_name: str, name: str) -> SchedulePreset | Non
         _note_rotation_sheet_error(guild_id, e, tab=tab_name)
         raise
     _note_rotation_sheet_ok(guild_id)
+    # A day's specific member is named by Discord ID first (#723), so a
+    # rename doesn't leave the old name scheduled.
+    id_col = _id_column(ws, values, guild_id, add=False)
+    roster = sheet_identity.load_roster(guild_id) if id_col >= 0 else sheet_identity.Roster()
     days: dict[int, DayRule] = {}
     found = False
     for row in values[1:]:
@@ -1310,11 +1448,12 @@ def load_preset(guild_id: int, tab_name: str, name: str) -> SchedulePreset | Non
         wd = weekday_index(_cell(row, 1))
         if wd is None:
             continue
-        rule_type = _cell(row, 2).lower() or RULE_AUTO
+        rule_type = DAY_RULE_WORDS.code(_cell(row, 2)) if _cell(row, 2) else RULE_AUTO
+        member_id = sheet_identity.cell(row, id_col)
         days[wd] = DayRule(
             weekday=wd,
             rule_type=rule_type,
-            specific_member=_cell(row, 3),
+            specific_member=roster.current_name(_cell(row, 3), member_id),
             notes=_cell(row, 4),
         )
     if not found:
@@ -1338,19 +1477,23 @@ def save_preset(guild_id: int, tab_name: str, preset: SchedulePreset) -> bool:
     kept = [
         row for row in values[1:] if _cell(row, 0) and _norm(_cell(row, 0)) != _norm(preset.name)
     ]
+    id_col = _id_column(ws, values, guild_id, add=True)
+    roster = sheet_identity.load_roster(guild_id)
     new_rows = []
     for wd in range(7):
         r = preset.rule_for(wd)
-        new_rows.append(
-            [
-                preset.name,
-                WEEKDAY_NAMES[wd],
-                r.rule_type,
-                r.specific_member,
-                r.notes,
-            ]
-        )
-    return _rewrite(ws, DAY_RULES_HEADER, kept + new_rows, guild_id, tab_name)
+        row = [
+            preset.name,
+            WEEKDAY_NAMES[wd],
+            DAY_RULE_WORDS.word(r.rule_type),
+            r.specific_member,
+            r.notes,
+        ]
+        if r.specific_member:
+            sheet_identity.set_cell(row, id_col, roster.id_for(r.specific_member))
+        new_rows.append(row)
+    sheet_identity.fill_ids(kept, name_col=3, id_col=id_col, roster=roster)
+    return _rewrite(ws, DAY_RULES_LAYOUT, values, kept + new_rows, guild_id, tab_name)
 
 
 def delete_preset(guild_id: int, tab_name: str, name: str) -> bool:
@@ -1364,31 +1507,56 @@ def delete_preset(guild_id: int, tab_name: str, name: str) -> bool:
         print(f"[TRAIN ROTATION] delete_preset read-back failed for guild {guild_id}: {e}")
         return False
     kept = [row for row in values[1:] if _cell(row, 0) and _norm(_cell(row, 0)) != _norm(name)]
-    return _rewrite(ws, DAY_RULES_HEADER, kept, guild_id, tab_name)
+    return _rewrite(ws, DAY_RULES_LAYOUT, values, kept, guild_id, tab_name)
 
 
 # ── Shared rewrite ───────────────────────────────────────────────────────────
 
 
+def _read(ws, layout: _Layout) -> list[list[str]]:
+    """A tab's rows, with its date columns as ISO text whatever the locale
+    shows (`sheet_format.read_values`)."""
+    return sheet_format.read_values(ws, layout.format)
+
+
 def _rewrite(
-    ws, header: list[str], body_rows: list[list[str]], guild_id: int, tab_name: str
+    ws,
+    layout: _Layout,
+    values: list[list[str]],
+    body_rows: list[list[str]],
+    guild_id: int,
+    tab_name: str,
 ) -> bool:
-    """Clear the tab below the header and write `body_rows` in one batch.
+    """Clear the tab below the header and write `body_rows` in one batch,
+    then bring the tab up to the house style (#729).
 
     Single `update` after one `batch_clear` keeps us well under the Sheets
-    60-writes/min quota even when a draft rewrites the whole history block."""
+    60-writes/min quota even when a draft rewrites the whole history block.
+    The cleared width covers the widest row, so the Discord ID column and any
+    column an officer added are rewritten rather than left stale. Every row
+    is written with the layout's words, so rows from before #729 lose their
+    codes here; `values` is the tab as read, for its header."""
+    for row in body_rows:
+        for col, words in layout.words:
+            if col < len(row):
+                row[col] = words.reword(row[col])
+    width = max([len(layout.header)] + [len(r) for r in body_rows])
     try:
-        ws.batch_clear([f"A2:{_col_letter(len(header))}{len(body_rows) + 5000}"])
+        ws.batch_clear([f"A2:{_col_letter(width)}{len(body_rows) + 5000}"])
         if body_rows:
             ws.update(
                 "A2",
                 body_rows,
                 value_input_option="USER_ENTERED",
             )
-        return True
     except Exception as e:
         print(f"[TRAIN ROTATION] rewrite of {tab_name!r} failed for guild {guild_id}: {e}")
         return False
+    header = list(values[0]) if values else []
+    if layout.renames and header:
+        rename_headers(ws, header, dict(layout.renames))
+    sheet_format.ensure_formatted(ws, layout.format)
+    return True
 
 
 def _col_letter(n: int) -> str:

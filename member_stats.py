@@ -165,9 +165,14 @@ def _tracked_data_names(guild_id: int) -> list[str]:
         tcfg = config.get_train_config(guild_id)
         import train_rotation as tr
 
+        import sheet_identity
+
+        roster = sheet_identity.load_roster(guild_id)
         for row in tr.load_history(guild_id, tcfg.get("history_tab") or "Train History"):
-            if row.member and row.member.strip():
-                names.add(row.member.strip())
+            # A renamed member is listed once, under their current name (#723).
+            name = roster.current_name(row.member, row.discord_id).strip()
+            if name:
+                names.add(name)
     except Exception as e:
         logger.warning("[MEMBERSTATS] tracked-names train read failed guild=%s: %s", guild_id, e)
     return sorted(names, key=str.lower)
@@ -314,11 +319,7 @@ def _train_field(guild_id: int, target: Target, *, leadership_view: bool) -> Opt
     import train_rotation as tr
 
     counted = tr.parse_counted_reasons(tcfg.get("counted_reasons"))
-    counts = tr.rotation_counts(history, counted)
-    last = tr.last_driven_dates(history)
-    n = target.name.strip().lower()
-    count = next((c for k, c in counts.items() if k.strip().lower() == n), 0)
-    last_drove = next((d for k, d in last.items() if k.strip().lower() == n), None)
+    count, last_drove, reasons = _train_stats(history, target, counted)
 
     line = f"Conductor: **{count}** time{'s' if count != 1 else ''}"
     if last_drove:
@@ -326,15 +327,35 @@ def _train_field(guild_id: int, target: Target, *, leadership_view: bool) -> Opt
     out = [line]
 
     if leadership_view:
-        from collections import Counter
-
-        reasons = Counter(
-            r.reason for r in history if (r.member or "").strip().lower() == n and r.reason
-        )
         if reasons:
             breakdown = ", ".join(f"{reason} {c}" for reason, c in reasons.most_common())
             out.append(f"_Reason breakdown:_ {breakdown}")
     return "\n".join(out)
+
+
+def _train_stats(history, target: Target, counted: set[str]):
+    """`(drives, last drove, reasons Counter)` for the target's Train History rows.
+
+    A row is theirs by Discord ID first, then name (#723), so drives logged
+    under a name they have since changed still count, and a different member
+    who shares the name doesn't."""
+    from collections import Counter
+    from dataclasses import replace
+
+    import sheet_identity
+    import train_rotation as tr
+
+    wanted = str(target.discord_id) if target.discord_id else ""
+    mine = [
+        replace(r, member=target.name)
+        for r in history
+        if sheet_identity.same_member(r.member, r.discord_id, target.name, wanted)
+    ]
+    key = target.name.strip().lower()
+    count = tr.rotation_counts(mine, counted).get(key, 0)
+    last_drove = tr.last_driven_dates(mine).get(key)
+    reasons = Counter(r.reason for r in mine if r.reason)
+    return count, last_drove, reasons
 
 
 def _storm_truthy(v: str) -> bool:
@@ -841,19 +862,10 @@ def _train_profile(guild_id: int, target: Target) -> Optional[dict]:
         return None
     if not history:
         return None
-    from collections import Counter
-
     import train_rotation as tr
 
     counted = tr.parse_counted_reasons(tcfg.get("counted_reasons"))
-    counts = tr.rotation_counts(history, counted)
-    last = tr.last_driven_dates(history)
-    n = target.name.strip().lower()
-    count = next((c for k, c in counts.items() if k.strip().lower() == n), 0)
-    last_drove = next((d for k, d in last.items() if k.strip().lower() == n), None)
-    reasons = Counter(
-        r.reason for r in history if (r.member or "").strip().lower() == n and r.reason
-    )
+    count, last_drove, reasons = _train_stats(history, target, counted)
     return {
         "conductor_count": count,
         "last_drove": last_drove or None,

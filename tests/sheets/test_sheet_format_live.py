@@ -8,7 +8,11 @@ The formatted tab is left in the test spreadsheet to look at.
 
 import time
 
+import pytest
+
 import sheet_format
+
+pytestmark = pytest.mark.sheets
 
 
 def _filter_range(sh, title: str) -> dict:

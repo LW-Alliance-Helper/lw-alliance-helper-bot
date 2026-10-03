@@ -205,6 +205,7 @@ def test_preview_survey_history(seeded_db, test_spreadsheet, clean_caches):
 
     meta = _meta(sh, title)
     assert _frozen(meta) == (1, 3)
+    assert "basicFilter" not in meta  # the survey no longer adds one (#729)
 
 
 def _member(did: str, name: str, joined: datetime):

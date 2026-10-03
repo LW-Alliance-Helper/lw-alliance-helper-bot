@@ -522,7 +522,8 @@ class TestSeedSurveyHeaders:
         assert seeded == ["VP Buff History"]
         responses.update.assert_not_called()
 
-    def test_history_tab_gets_a_filter_row(self, seeded_db):
+    def test_neither_tab_gets_a_filter(self, seeded_db):
+        """Alliances add their own filters; the bot sets none (#729)."""
         from survey import seed_survey_headers
 
         sh, responses, history = self._sheet()
@@ -534,7 +535,7 @@ class TestSeedSurveyHeaders:
                 questions=self.QUESTIONS,
             )
 
-        history.set_basic_filter.assert_called_once()
+        history.set_basic_filter.assert_not_called()
         responses.set_basic_filter.assert_not_called()
 
     def test_header_definition_matches_what_the_write_paths_produce(self):

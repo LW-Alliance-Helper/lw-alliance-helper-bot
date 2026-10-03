@@ -414,12 +414,12 @@ class TestSurveyHistoryTab:
         assert sheet.column_at("A") == ["avalue"]
         assert sheet.column_at("B") == ["bvalue"]
 
-    def test_a_blank_tab_gets_the_header_and_a_filter(self, seeded_db):
+    def test_a_blank_tab_gets_the_header_and_no_filter(self, seeded_db):
         ws = FakeWS([])
         self._run(ws, [q("tz", "Time Zone")], {"tz": "UTC+2"})
 
         assert ws.rows[0] == ["Timestamp (server time)", "Discord ID", "Username", "Time Zone"]
-        assert ws.filtered is True
+        assert ws.filtered is False  # alliances add their own (#729)
 
     def test_multi_select_answers_are_flattened(self, seeded_db):
         ws = FakeWS([])
@@ -722,4 +722,4 @@ class TestSurveyTabStyle:
         assert answers.date == (4, 5) and answers.datetime == ()
         assert history.datetime == (0,) and history.date == (5,)
         # The history tab's filter call is left in place for Kevin to decide.
-        assert tabs["History"].filtered is True
+        assert tabs["History"].filtered is False

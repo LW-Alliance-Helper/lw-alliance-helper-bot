@@ -423,9 +423,11 @@ def seed_survey_headers(
     responses_header, history_header = survey_header_rows(questions)
     seeded: list[str] = []
 
-    for tab_name, header, add_filter in (
-        (tab_responses, responses_header, False),
-        (tab_history, history_header, True),
+    # No filter on either tab: alliances add their own, and the bot never
+    # sets one (Kevin, 2026-10-03, #729).
+    for tab_name, header, stamp in (
+        (tab_responses, responses_header, (SURVEY_MODIFIED_COLUMN, "date")),
+        (tab_history, history_header, (SURVEY_HISTORY_STAMP, "datetime")),
     ):
         if not tab_name:
             continue
@@ -433,14 +435,6 @@ def seed_survey_headers(
         if any(ws.row_values(1)):
             continue
         ws.update("A1", [header], value_input_option="USER_ENTERED")
-        if add_filter:
-            try:
-                ws.set_basic_filter()
-            except Exception:
-                pass
-        stamp = (
-            (SURVEY_HISTORY_STAMP, "datetime") if add_filter else (SURVEY_MODIFIED_COLUMN, "date")
-        )
         _adopt_id_column(ws, header, guild_id)
         sheet_format.ensure_formatted(
             ws, _tab_format(header, _column_kinds(header, questions, stamp=stamp))
@@ -564,10 +558,6 @@ def append_survey_history(
 
     if not existing:
         ws.update("A1", [header], value_input_option="USER_ENTERED")
-        try:
-            ws.set_basic_filter()
-        except Exception:
-            pass
     elif header != existing:
         # Append-only: this tab is every submission ever, so columns are
         # added on the right and never reordered. Rows already stored

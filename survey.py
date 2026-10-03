@@ -39,7 +39,11 @@ from messages import (
 from setup_hub import HUB_BTN_SURVEY
 from survey_hub import SURVEY_HUB_BTN_POST, SURVEY_HUB_BTN_REMIND
 import config_health
+import sheet_format
+import sheet_identity
 import wizard_registry
+from sheet_words import rename_headers
+from time_helpers import server_stamp, server_today
 
 # #379: the channel the scheduled survey reminder posts to.
 SURVEY_REMINDER_CHANNEL_SUBJECT = "survey.reminder_channel"
@@ -184,8 +188,13 @@ def survey_question_keys_and_labels(questions: list) -> tuple[list[str], list[st
 # Bot-owned columns. Named so the merge logic can tell them apart from
 # the alliance's own question columns, which come and go with the config.
 SURVEY_MODIFIED_COLUMN = "Date Modified"
+# A submission is a game moment, so its stamp is server time and the header
+# says so (#729). Tabs from before carry "Timestamp", renamed on the next
+# submission while the cell still holds exactly that.
+SURVEY_HISTORY_STAMP = "Timestamp (server time)"
+_OLD_HISTORY_STAMP = "Timestamp"
 SURVEY_RESPONSES_BASE = ["Username", "Discord ID"]
-SURVEY_HISTORY_BASE = ["Timestamp", "Discord ID", "Username"]
+SURVEY_HISTORY_BASE = [SURVEY_HISTORY_STAMP, "Discord ID", "Username"]
 
 # The squad-power template's first-ever headers (April 2026) read "1st/2nd/3rd
 # Squad" — the May 2026 audit renamed the question labels to "...Squad Power"
@@ -213,6 +222,100 @@ def survey_header_rows(questions: list) -> tuple[list[str], list[str]]:
         SURVEY_RESPONSES_BASE + q_labels + [SURVEY_MODIFIED_COLUMN],
         SURVEY_HISTORY_BASE + q_labels,
     )
+
+
+# ── The house style for a survey's two tabs (#729) ──────────────────────────
+#
+# Which columns hold numbers or dates comes from the survey's own questions, so
+# a tab's format is worked out from its header and the question list each time
+# it is written. The pass itself (`sheet_format.ensure_formatted`) runs once per
+# tab; a column added or moved later gets its format from
+# `_reformat_moved_columns` when the header changes shape.
+
+_ANSWER_KINDS = {"numeric": "quantity", "date": "date"}
+
+
+def _column_kinds(header: list[str], questions: list, *, stamp: tuple[str, str]) -> dict[int, str]:
+    """`{column index: format kind}` for the survey's own columns in `header`:
+    numeric answers are quantities, date answers dates, the Discord ID text, and
+    `stamp` is `(header, kind)` of the tab's own date column. Every other column
+    takes no number format."""
+    kinds: dict[str, str] = {}
+    for i, q in enumerate(questions):
+        kind = _ANSWER_KINDS.get(q.get("type"))
+        if kind:
+            kinds[q.get("label", q.get("key", f"field_{i}"))] = kind
+    for legacy, modern in LEGACY_SQUAD_POWER_LABELS.items():
+        if modern in kinds:
+            kinds.setdefault(legacy, kinds[modern])
+    kinds["Discord ID"] = "text"
+    kinds[stamp[0]] = stamp[1]
+    return {i: kinds[h] for i, h in enumerate(header) if h in kinds}
+
+
+def _tab_format(header: list[str], kinds: dict[int, str]) -> sheet_format.TabSpec:
+    """A survey tab's `TabSpec`: its column kinds, with the header and the
+    Username column frozen (A on the answers tab, C on the history tab)."""
+
+    def of(kind):
+        return tuple(sorted(i for i, k in kinds.items() if k == kind))
+
+    name_at = header.index("Username") if "Username" in header else -1
+    return sheet_format.TabSpec(
+        quantity=of("quantity"),
+        text=of("text"),
+        date=of("date"),
+        datetime=of("datetime"),
+        frozen_columns=name_at + 1 if 0 <= name_at < 3 else 0,
+    )
+
+
+def _adopt_id_column(ws, header: list[str], guild_id) -> None:
+    """The Discord ID column as text, tagged like every member ID column. Before
+    a write, so the ID lands as text: the Buddies tab's Profession formulas
+    MATCH against this column, and MATCH never equates a number with text."""
+    if "Discord ID" in header:
+        sheet_identity.adopt_columns(ws, [header.index("Discord ID")], guild_id=guild_id)
+
+
+def _reformat_moved_columns(ws, old_header: list[str], header: list[str], kinds: dict) -> None:
+    """Give each column whose header changed its own number format.
+
+    A cell's format stays put when the values move, so when a new question
+    pushes "Date Modified" right, the new question's answers would sit in the
+    old Date-formatted cells and read as dates. Every column whose header is
+    new or different at its index gets its kind's format, or none.
+    Best-effort, one call."""
+    sheet_id = getattr(ws, "id", None)
+    sh = getattr(ws, "spreadsheet", None)
+    if not isinstance(sheet_id, int) or sh is None:
+        return
+    requests = []
+    for idx, column in enumerate(header):
+        if idx < len(old_header) and old_header[idx] == column:
+            continue
+        kind = kinds.get(idx)
+        fmt = {"numberFormat": sheet_format.NUMBER_FORMATS[kind]} if kind else {}
+        requests.append(
+            {
+                "repeatCell": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": 1,
+                        "startColumnIndex": idx,
+                        "endColumnIndex": idx + 1,
+                    },
+                    "cell": {"userEnteredFormat": fmt},
+                    "fields": "userEnteredFormat.numberFormat",
+                }
+            }
+        )
+    if not requests:
+        return
+    try:
+        sh.batch_update({"requests": requests})
+    except Exception as e:
+        print(f"[SURVEY] Could not format the moved columns on '{getattr(ws, 'title', '?')}': {e}")
 
 
 def _values_by_column(
@@ -335,6 +438,13 @@ def seed_survey_headers(
                 ws.set_basic_filter()
             except Exception:
                 pass
+        stamp = (
+            (SURVEY_HISTORY_STAMP, "datetime") if add_filter else (SURVEY_MODIFIED_COLUMN, "date")
+        )
+        _adopt_id_column(ws, header, guild_id)
+        sheet_format.ensure_formatted(
+            ws, _tab_format(header, _column_kinds(header, questions, stamp=stamp))
+        )
         seeded.append(tab_name)
 
     return seeded
@@ -369,8 +479,9 @@ def update_squad_powers(
     ws = get_or_create_worksheet(sh, tab_name)
     rows = ws.get_all_values()
 
-    _now = datetime.now(timezone.utc)
-    now_str = f"{_now.month}/{_now.day}/{_now.year}"
+    # The server day, as ISO so Sheets reads it as a real date for the column's
+    # Date format: a submission is a game moment (#729).
+    now_str = server_today().isoformat()
 
     desired, _unused = survey_header_rows(questions)
     existing_header = rows[0] if rows else []
@@ -380,16 +491,28 @@ def update_squad_powers(
         pin_last=SURVEY_MODIFIED_COLUMN,
         legacy_aliases=LEGACY_SQUAD_POWER_LABELS,
     )
+    stamp = (SURVEY_MODIFIED_COLUMN, "date")
+    kinds = _column_kinds(header, questions, stamp=stamp)
+    _adopt_id_column(ws, header, guild_id)
 
     # This tab holds one row per member, so when the columns move it can
     # afford to be remapped wholesale — which keeps "Date Modified"
     # rightmost instead of stranding it mid-header. The history tab can't
     # (it grows without bound), so it only ever gains columns on the right.
     if header != [c for c in existing_header if c]:
+        if len(rows) > 1:
+            # Read again with the dates as ISO, so the rewrite below puts the
+            # same dates back whatever the alliance's locale shows.
+            old_kinds = _column_kinds(existing_header, questions, stamp=stamp)
+            rows = sheet_format.read_values(
+                ws, _tab_format(existing_header, old_kinds), keep_text=True
+            )
         rows = _remap_rows_to_header(rows, header)
         ws.update("A1", rows or [header], value_input_option="USER_ENTERED")
         if not rows:
             rows = [header]
+        if any(existing_header):
+            _reformat_moved_columns(ws, existing_header, header, kinds)
         print(f"[SURVEY] Rebuilt '{tab_name}' header for guild={guild_id} ({len(header)} columns)")
 
     values = _values_by_column(questions, data, username, discord_id, now_str)
@@ -400,10 +523,11 @@ def update_squad_powers(
                 _owned_cell_ranges(header, values, i + 1), value_input_option="USER_ENTERED"
             )
             print(f"[SURVEY] Updated Squad Powers row {i + 1} for {username}")
-            return
-
-    ws.append_row(row_for_header(header, values), value_input_option="USER_ENTERED")
-    print(f"[SURVEY] Appended new Squad Powers row for {username}")
+            break
+    else:
+        ws.append_row(row_for_header(header, values), value_input_option="USER_ENTERED")
+        print(f"[SURVEY] Appended new Squad Powers row for {username}")
+    sheet_format.ensure_formatted(ws, _tab_format(header, kinds))
 
 
 def append_survey_history(
@@ -431,8 +555,12 @@ def append_survey_history(
     ws = get_or_create_worksheet(sh, tab_name)
 
     _unused, desired = survey_header_rows(questions)
-    existing = [c for c in ws.row_values(1) if c]
+    first_row = ws.row_values(1)
+    rename_headers(ws, first_row, {_OLD_HISTORY_STAMP: SURVEY_HISTORY_STAMP})
+    existing = [c for c in first_row if c]
     header = merge_sheet_header(existing, desired, legacy_aliases=LEGACY_SQUAD_POWER_LABELS)
+    kinds = _column_kinds(header, questions, stamp=(SURVEY_HISTORY_STAMP, "datetime"))
+    _adopt_id_column(ws, header, guild_id)
 
     if not existing:
         ws.update("A1", [header], value_input_option="USER_ENTERED")
@@ -445,18 +573,22 @@ def append_survey_history(
         # added on the right and never reordered. Rows already stored
         # keep meaning exactly what they meant when they were written.
         ws.update("A1", [header], value_input_option="USER_ENTERED")
+        _reformat_moved_columns(ws, existing, header, kinds)
         print(
             f"[SURVEY] Extended '{tab_name}' header for guild={guild_id} to {len(header)} columns"
         )
 
-    _now = datetime.now(timezone.utc)
-    now_str = f"{_now.month}/{_now.day}/{_now.year} {_now:%H:%M} UTC"
+    # Server time with no zone, which Sheets reads as a real date-time; the
+    # header names the clock (#729).
     row = row_for_header(
         header,
-        _values_by_column(questions, data, username, discord_id, now_str, stamp_column="Timestamp"),
+        _values_by_column(
+            questions, data, username, discord_id, server_stamp(), stamp_column=SURVEY_HISTORY_STAMP
+        ),
     )
     ws.append_row(row, value_input_option="USER_ENTERED")
     print(f"[SURVEY] Appended Survey History row for {username}")
+    sheet_format.ensure_formatted(ws, _tab_format(header, kinds))
 
 
 # ── Dropdown views ─────────────────────────────────────────────────────────────

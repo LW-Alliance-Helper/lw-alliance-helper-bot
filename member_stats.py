@@ -31,6 +31,8 @@ from typing import Optional
 import discord
 from discord import app_commands
 from discord.ext import commands
+
+import sheet_format
 from wizard_registry import ExpiringView
 
 logger = logging.getLogger(__name__)
@@ -54,12 +56,17 @@ class Target:
 # ── Roster resolution ────────────────────────────────────────────────────────
 
 
-def _roster_rows(guild_id: int) -> tuple[dict, list[list[str]]]:
+def _roster_rows(guild_id: int, *, joined: bool = False) -> tuple[dict, list[list[str]]]:
     """Return (roster_config, all_values). Raises on sheet failure — callers
-    soft-handle."""
+    soft-handle. `joined` reads the Joined column as ISO whatever the
+    alliance's locale shows (#729); only the lookups that show it need that."""
     import config
 
     rcfg = config.get_member_roster_config(guild_id)
+    if joined:
+        import member_roster
+
+        return rcfg, member_roster.read_roster_values(guild_id, rcfg)
     values = config.read_member_roster_values(guild_id, rcfg.get("tab_name") or "Member Roster")
     return rcfg, values
 
@@ -71,7 +78,7 @@ def _cell(row: list[str], idx: int) -> str:
 def _resolve_self(guild_id: int, discord_id: int) -> Optional[Target]:
     """Find the caller's own roster row by Discord ID."""
     try:
-        rcfg, values = _roster_rows(guild_id)
+        rcfg, values = _roster_rows(guild_id, joined=True)
     except Exception as e:
         logger.warning("[MEMBERSTATS] roster read failed (self) guild=%s: %s", guild_id, e)
         return None
@@ -89,7 +96,7 @@ def _resolve_self(guild_id: int, discord_id: int) -> Optional[Target]:
 def _resolve_named(guild_id: int, query: str) -> Optional[Target]:
     """Find a roster row by display name / name (case-insensitive)."""
     try:
-        rcfg, values = _roster_rows(guild_id)
+        rcfg, values = _roster_rows(guild_id, joined=True)
     except Exception as e:
         logger.warning("[MEMBERSTATS] roster read failed (named) guild=%s: %s", guild_id, e)
         return None
@@ -623,16 +630,36 @@ def _survey_field(guild_id: int, target: Target) -> Optional[str]:
     return "\n".join(lines) if lines else None
 
 
-def _parse_survey_ts(raw: str):
-    """Parse the Survey History timestamp (`M/D/YYYY HH:MM UTC`)."""
-    from datetime import datetime
+# The Survey History stamp's column, read as `YYYY-MM-DD HH:MM:SS` whatever
+# the alliance's locale shows (#729).
+_SURVEY_HISTORY_FORMAT = sheet_format.TabSpec(datetime=(0,))
 
-    s = (raw or "").strip().replace(" UTC", "")
+
+def _parse_survey_ts(raw: str):
+    """Parse a Survey History stamp into a naive server-time datetime.
+
+    The bot writes `YYYY-MM-DD HH:MM:SS` in server time (#729). Rows from
+    before carry `M/D/YYYY HH:MM UTC` text, moved onto the server clock here so
+    old and new rows compare and show the same day."""
+    from datetime import datetime, timezone
+
+    from time_helpers import SERVER_TZ
+
+    s = (raw or "").strip()
+    try:
+        return datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        pass
+    utc = s.endswith(" UTC")
+    s = s.replace(" UTC", "")
     for fmt in ("%m/%d/%Y %H:%M", "%m/%d/%Y"):
         try:
-            return datetime.strptime(s, fmt)
+            moment = datetime.strptime(s, fmt)
         except ValueError:
             continue
+        if utc:
+            moment = moment.replace(tzinfo=timezone.utc).astimezone(SERVER_TZ).replace(tzinfo=None)
+        return moment
     return None
 
 
@@ -641,7 +668,7 @@ def _last_survey_response(guild_id: int, tab: str, target: Target) -> Optional[s
 
     try:
         ws = config.get_spreadsheet(guild_id).worksheet(tab)
-        values = ws.get_all_values()
+        values = sheet_format.read_values(ws, _SURVEY_HISTORY_FORMAT)
     except Exception as e:
         logger.warning("[MEMBERSTATS] survey history read failed guild=%s: %s", guild_id, e)
         return None
@@ -650,7 +677,7 @@ def _last_survey_response(guild_id: int, tab: str, target: Target) -> Optional[s
     did = str(target.discord_id) if target.discord_id else None
     name = target.name.strip().lower()
     best = None
-    for row in values[1:]:  # cols: Timestamp, Discord ID, Username, ...
+    for row in values[1:]:  # cols: Timestamp (server time), Discord ID, Username, ...
         rid, uname = _cell(row, 1), _cell(row, 2)
         match = (rid == did) if did else (uname.strip().lower() == name)
         if not match:

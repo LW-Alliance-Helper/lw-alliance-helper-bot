@@ -356,3 +356,33 @@ class TestOverlays:
         )
         # Neither missing tab is opened, so no soft error surfaces.
         assert _read(gid) == ({}, [])
+
+
+# ── #729: a real date in the last-updated column ─────────────────────────────
+
+
+class TestLastUpdatedDates:
+    def test_a_locale_date_reads_through_its_serial_and_old_text_still_parses(self):
+        """Squad Powers' Date Modified is a real date since #729, shown as the
+        alliance's locale (28/09/2026 here). The column is re-read unformatted;
+        an old cell typed as text comes back as text and parses as before."""
+        from datetime import date
+
+        import storm_roster_powers as srp
+
+        ws = MagicMock()
+        ws.get_all_values.return_value = [
+            ["Username", "Discord ID", "Date Modified"],
+            ["Alpha", "100000000000000001", "28/09/2026"],
+            ["Bravo", "100000000000000002", "9/1/2026"],
+        ]
+        ws.batch_get.return_value = [[[46293], ["9/1/2026"]]]
+        with patch("config.get_member_roster_sheet", return_value=ws):
+            by_id, _by_name, errors = srp.build_last_updated_index(1, "Squad Powers", 2, 1)
+
+        assert errors == []
+        assert by_id == {
+            "100000000000000001": date(2026, 9, 28),
+            "100000000000000002": date(2026, 9, 1),
+        }
+        assert ws.batch_get.call_args.args[0] == ["C2:C"]

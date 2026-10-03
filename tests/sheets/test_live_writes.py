@@ -521,7 +521,11 @@ class TestMemberRosterWrite:
         assert written == 2
 
         time.sleep(1.0)
-        rows = ws.get_all_values()
+        # Joined is a real date now (#729), shown in the sheet's locale, so it
+        # is read back unformatted, as ISO, the way the bot's readers do.
+        import sheet_format
+
+        rows = sheet_format.read_values(ws, sheet_format.TabSpec(date=(3,)), keep_text=True)
 
         # Header
         assert rows[0][:5] == ["Discord ID", "Name", "Display Name", "Joined", "Roles"]
@@ -532,7 +536,10 @@ class TestMemberRosterWrite:
         assert data[0][0] == "111"  # Alice's id
         assert data[0][1] == "alice"
         assert data[0][2] == "Alice"
-        assert data[0][3] == "2025-01-05"
+        # The alliance's day, not Discord's UTC one (#729).
+        joined = datetime(2025, 1, 5, tzinfo=timezone.utc)
+        alliance_day = joined.astimezone(member_roster._alliance_zone(TEST_GUILD_ID)).date()
+        assert data[0][3] == alliance_day.isoformat()
         assert "Member" in data[0][4]
         assert "Leadership" not in data[0][4]
 

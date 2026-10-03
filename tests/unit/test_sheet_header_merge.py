@@ -346,7 +346,9 @@ class TestLegacySquadPowerLabels:
                 "111", "Alice", {"squad1_power": "43.27"}, guild_id=TEST_GUILD_ID, survey=survey
             )
 
-        assert ws.rows[0] == ["Timestamp", "Discord ID", "Username", "1st Squad"]
+        # The bot's old "Timestamp" header names its clock now (#729); the
+        # legacy question header is left as it is.
+        assert ws.rows[0] == ["Timestamp (server time)", "Discord ID", "Username", "1st Squad"]
         assert sheet.column_at("1st Squad") == ["43.27"]
 
     def test_a_sheet_using_the_current_label_already_is_unaffected(self, seeded_db):
@@ -394,7 +396,13 @@ class TestSurveyHistoryTab:
             {"tz": "UTC+2", "role": "Engineer"},
         )
 
-        assert ws.rows[0] == ["Timestamp", "Discord ID", "Username", "Time Zone", "Preferred Role"]
+        assert ws.rows[0] == [
+            "Timestamp (server time)",
+            "Discord ID",
+            "Username",
+            "Time Zone",
+            "Preferred Role",
+        ]
         assert ws.rows[1] == before, "an already-submitted row must not be rewritten"
         assert sheet.column_at("Preferred Role") == ["", "Engineer"]
 
@@ -410,7 +418,7 @@ class TestSurveyHistoryTab:
         ws = FakeWS([])
         self._run(ws, [q("tz", "Time Zone")], {"tz": "UTC+2"})
 
-        assert ws.rows[0] == ["Timestamp", "Discord ID", "Username", "Time Zone"]
+        assert ws.rows[0] == ["Timestamp (server time)", "Discord ID", "Username", "Time Zone"]
         assert ws.filtered is True
 
     def test_multi_select_answers_are_flattened(self, seeded_db):
@@ -465,3 +473,251 @@ class TestParticipationLog:
         sheet = self._run(ws, [q("sat", "Sat out")], {"sat": ["Bob", "Carol"]})
 
         assert sheet.column_at("Sat out") == ["Bob, Carol"]
+
+
+# ── #729: real dates, server time, full numbers, IDs as text ─────────────────
+
+
+def _serial(day: date) -> int:
+    """A date as Sheets stores it unformatted."""
+    return (day - date(1899, 12, 30)).days
+
+
+class DatedWS(FakeWS):
+    """A FakeWS whose `batch_get` answers an unformatted read, the way Sheets
+    does for a column holding real dates: `serials` maps a stored cell's text
+    to the serial number behind it."""
+
+    def __init__(self, rows=None, serials=None):
+        super().__init__(rows)
+        self.serials = serials or {}
+
+    def batch_get(self, ranges, **kw):
+        from gspread.utils import a1_to_rowcol
+
+        out = []
+        for rng in ranges:
+            col = a1_to_rowcol(rng.split(":")[0])[1] - 1
+            out.append(
+                [[self.serials.get(r[col], r[col]) if col < len(r) else ""] for r in self.rows[1:]]
+            )
+        return out
+
+
+SQUAD = [
+    {"key": "s1", "label": "1st Squad Power", "type": "numeric"},
+    {"key": "role", "label": "Profession", "type": "dropdown"},
+    {"key": "bday", "label": "Birthday", "type": "date"},
+]
+
+
+class TestSurveyTabStyle:
+    def test_squad_powers_columns_by_kind(self):
+        from survey import _column_kinds, _tab_format, survey_header_rows
+
+        header, _ = survey_header_rows(SQUAD)
+        assert header == [
+            "Username",
+            "Discord ID",
+            "1st Squad Power",
+            "Profession",
+            "Birthday",
+            "Date Modified",
+        ]
+        spec = _tab_format(header, _column_kinds(header, SQUAD, stamp=("Date Modified", "date")))
+        assert spec.quantity == (2,)
+        assert spec.text == (1,)
+        assert spec.date == (4, 5)
+        assert spec.datetime == ()
+        assert spec.frozen_columns == 1  # Username
+
+    def test_survey_history_columns_by_kind(self):
+        from survey import _column_kinds, _tab_format, survey_header_rows
+
+        _, header = survey_header_rows(SQUAD)
+        assert header[:3] == ["Timestamp (server time)", "Discord ID", "Username"]
+        kinds = _column_kinds(header, SQUAD, stamp=("Timestamp (server time)", "datetime"))
+        spec = _tab_format(header, kinds)
+        assert spec.datetime == (0,) and spec.text == (1,) and spec.quantity == (3,)
+        assert spec.frozen_columns == 3  # through Username
+
+    def test_a_legacy_squad_header_is_a_quantity_too(self):
+        from survey import _column_kinds
+
+        header = ["Username", "Discord ID", "1st Squad", "Date Modified"]
+        assert _column_kinds(header, SQUAD, stamp=("Date Modified", "date"))[2] == "quantity"
+
+    def test_date_modified_is_the_server_day_as_iso(self, seeded_db):
+        from survey import update_squad_powers
+
+        ws = FakeWS([["Username", "Discord ID", "1st Squad Power", "Date Modified"]])
+        survey = {"tab_squad_powers": "Answers", "questions": SQUAD[:1]}
+        with (
+            patch("survey._get_spreadsheet", return_value=FakeSheet(ws)),
+            patch("survey.server_today", return_value=date(2026, 9, 28)),
+            patch("sheet_format.ensure_formatted") as fmt,
+            patch("sheet_identity.adopt_columns") as adopt,
+        ):
+            update_squad_powers(
+                "100000000000000001", "Alpha", {"s1": "304743912"}, TEST_GUILD_ID, survey
+            )
+
+        assert ws.rows[1] == ["Alpha", "100000000000000001", "304743912", "2026-09-28"]
+        assert adopt.call_args.args[1] == [1]
+        spec = fmt.call_args.args[1]
+        assert spec.date == (3,) and spec.quantity == (2,) and spec.text == (1,)
+
+    def test_a_resubmit_formats_once_the_row_is_written(self, seeded_db):
+        from survey import update_squad_powers
+
+        ws = FakeWS(
+            [
+                ["Username", "Discord ID", "1st Squad Power", "Date Modified"],
+                ["Alpha", "111", "1", "2026-09-01"],
+            ]
+        )
+        survey = {"tab_squad_powers": "Answers", "questions": SQUAD[:1]}
+        with (
+            patch("survey._get_spreadsheet", return_value=FakeSheet(ws)),
+            patch("sheet_format.ensure_formatted") as fmt,
+        ):
+            update_squad_powers("111", "Alpha", {"s1": "2"}, TEST_GUILD_ID, survey)
+        assert ws.rows[1][2] == "2" and fmt.call_count == 1
+
+    def test_a_remap_puts_the_same_dates_back_whatever_the_locale_shows(self, seeded_db):
+        """Adding a question rewrites every row. Bravo's date shows as the
+        locale's 28/09/2026, which a rewrite must not turn into something
+        else: it is read back as ISO first."""
+        from survey import update_squad_powers
+
+        ws = DatedWS(
+            [
+                ["Username", "Discord ID", "1st Squad Power", "Date Modified"],
+                ["Bravo", "222", "300,000,000", "28/09/2026"],
+            ],
+            serials={"28/09/2026": _serial(date(2026, 9, 28))},
+        )
+        survey = {"tab_squad_powers": "Answers", "questions": SQUAD[:2]}
+        with (
+            patch("survey._get_spreadsheet", return_value=FakeSheet(ws)),
+            patch("survey.server_today", return_value=date(2026, 10, 3)),
+        ):
+            update_squad_powers(
+                "111", "Alpha", {"s1": "5", "role": "Engineer"}, TEST_GUILD_ID, survey
+            )
+
+        assert ws.rows[0][-1] == "Date Modified"
+        assert ws.rows[1] == ["Bravo", "222", "300,000,000", "", "2026-09-28"]
+        assert ws.rows[2][-1] == "2026-10-03"
+
+    def test_moved_columns_take_their_own_number_format(self):
+        """A new question lands where Date Modified was: its cells must not
+        keep the Date format, and Date Modified's new column takes it."""
+        from unittest.mock import MagicMock
+
+        from survey import _column_kinds, _reformat_moved_columns
+
+        ws = MagicMock()
+        ws.id = 7
+        old = ["Username", "Discord ID", "Notes", "Date Modified"]
+        new = ["Username", "Discord ID", "Notes", "1st Squad Power", "Date Modified"]
+        kinds = _column_kinds(new, SQUAD[:1], stamp=("Date Modified", "date"))
+        _reformat_moved_columns(ws, old, new, kinds)
+
+        requests = ws.spreadsheet.batch_update.call_args.args[0]["requests"]
+        by_col = {
+            r["repeatCell"]["range"]["startColumnIndex"]: r["repeatCell"]["cell"][
+                "userEnteredFormat"
+            ]
+            for r in requests
+        }
+        assert by_col == {
+            3: {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}},
+            4: {"numberFormat": {"type": "DATE"}},
+        }
+
+    def test_a_moved_column_with_no_kind_loses_the_old_format(self):
+        from unittest.mock import MagicMock
+
+        from survey import _column_kinds, _reformat_moved_columns
+
+        ws = MagicMock()
+        ws.id = 7
+        old = ["Username", "Discord ID", "Date Modified"]
+        new = ["Username", "Discord ID", "Notes", "Date Modified"]
+        kinds = _column_kinds(new, [], stamp=("Date Modified", "date"))
+        _reformat_moved_columns(ws, old, new, kinds)
+        requests = ws.spreadsheet.batch_update.call_args.args[0]["requests"]
+        assert requests[0]["repeatCell"]["cell"] == {"userEnteredFormat": {}}
+        assert requests[0]["repeatCell"]["fields"] == "userEnteredFormat.numberFormat"
+
+    def test_history_stamp_is_server_time_with_no_zone(self, seeded_db):
+        from survey import append_survey_history
+
+        ws = FakeWS([])
+        survey = {"tab_history": "History", "questions": SQUAD[:1]}
+        with (
+            patch("survey._get_spreadsheet", return_value=FakeSheet(ws)),
+            patch("survey.server_stamp", return_value="2026-09-28 20:00:05"),
+            patch("sheet_format.ensure_formatted") as fmt,
+        ):
+            append_survey_history("111", "Alpha", {"s1": "5"}, TEST_GUILD_ID, survey)
+
+        assert ws.rows[1][0] == "2026-09-28 20:00:05"
+        assert fmt.call_args.args[1].datetime == (0,)
+
+    def test_the_old_timestamp_header_is_renamed_and_keeps_its_column(self, seeded_db):
+        from survey import append_survey_history
+
+        ws = FakeWS(
+            [
+                ["Timestamp", "Discord ID", "Username", "1st Squad Power"],
+                ["9/28/2026 22:00 UTC", "222", "Bravo", "7"],
+            ]
+        )
+        survey = {"tab_history": "History", "questions": SQUAD[:1]}
+        with (
+            patch("survey._get_spreadsheet", return_value=FakeSheet(ws)),
+            patch("survey.server_stamp", return_value="2026-10-03 08:00:00"),
+        ):
+            append_survey_history("111", "Alpha", {"s1": "5"}, TEST_GUILD_ID, survey)
+
+        assert ws.rows[0] == [
+            "Timestamp (server time)",
+            "Discord ID",
+            "Username",
+            "1st Squad Power",
+        ]
+        assert ws.rows[1][0] == "9/28/2026 22:00 UTC"  # old rows are left as written
+        assert ws.rows[2] == ["2026-10-03 08:00:00", "111", "Alpha", "5"]
+
+    def test_a_timestamp_header_an_officer_renamed_stays_theirs(self, seeded_db):
+        from survey import append_survey_history
+
+        ws = FakeWS([["When", "Discord ID", "Username", "1st Squad Power"]])
+        survey = {"tab_history": "History", "questions": SQUAD[:1]}
+        with patch("survey._get_spreadsheet", return_value=FakeSheet(ws)):
+            append_survey_history("111", "Alpha", {"s1": "5"}, TEST_GUILD_ID, survey)
+        assert ws.rows[0][0] == "When"
+
+    def test_seeding_formats_both_tabs_with_their_own_spec(self, seeded_db):
+        from survey import seed_survey_headers
+
+        tabs = {"Answers": FakeWS([]), "History": FakeWS([])}
+
+        class Sheet:
+            def worksheet(self, name):
+                return tabs[name]
+
+        with (
+            patch("survey._get_spreadsheet", return_value=Sheet()),
+            patch("sheet_format.ensure_formatted") as fmt,
+        ):
+            seed_survey_headers(
+                TEST_GUILD_ID, tab_responses="Answers", tab_history="History", questions=SQUAD
+            )
+        answers, history = (c.args[1] for c in fmt.call_args_list)
+        assert answers.date == (4, 5) and answers.datetime == ()
+        assert history.datetime == (0,) and history.date == (5,)
+        # The history tab's filter call is left in place for Kevin to decide.
+        assert tabs["History"].filtered is True

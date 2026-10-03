@@ -502,7 +502,7 @@ class TestSeedSurveyHeaders:
             ["Username", "Discord ID", "Agree?", "Notes", "Date Modified"]
         ]
         assert history.update.call_args[0][1] == [
-            ["Timestamp", "Discord ID", "Username", "Agree?", "Notes"]
+            ["Timestamp (server time)", "Discord ID", "Username", "Agree?", "Notes"]
         ]
 
     def test_leaves_a_tab_that_already_has_a_header_alone(self, seeded_db):
@@ -546,7 +546,7 @@ class TestSeedSurveyHeaders:
         q_keys, q_labels = survey_question_keys_and_labels(self.QUESTIONS)
 
         assert responses_header == ["Username", "Discord ID"] + q_labels + ["Date Modified"]
-        assert history_header == ["Timestamp", "Discord ID", "Username"] + q_labels
+        assert history_header == ["Timestamp (server time)", "Discord ID", "Username"] + q_labels
         assert q_keys == ["agree", "notes"]
 
 

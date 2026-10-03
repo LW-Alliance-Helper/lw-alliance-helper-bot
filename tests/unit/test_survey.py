@@ -369,7 +369,7 @@ class TestAppendSurveyHistory:
         mock_ws.update.assert_called()
         header_call = mock_ws.update.call_args_list[0]
         header_row = header_call[0][1][0]
-        assert "Timestamp" in header_row
+        assert "Timestamp (server time)" in header_row
         assert "Discord ID" in header_row
         assert "Power" in header_row
 

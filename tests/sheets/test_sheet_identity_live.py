@@ -8,8 +8,12 @@ back exactly, not rounded to a number.
 
 import time
 
+import pytest
+
 import sheet_identity
 from tests.conftest import TEST_GUILD_ID
+
+pytestmark = pytest.mark.sheets
 
 REAL_ID = "1234567890123456789"
 

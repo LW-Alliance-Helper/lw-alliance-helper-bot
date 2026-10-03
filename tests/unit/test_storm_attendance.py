@@ -233,6 +233,24 @@ class TestLoadAttendance:
         assert existing[("A", "Power Tower", "Alice")]["status"] == "attended"
         assert existing[("A", "Power Tower", "Bob")]["status"] == "no_show"
 
+    def test_reads_words_under_the_label_header(self, fake_env):
+        """#729: the attendance column is headed by the preset's label and
+        holds Yes / No; it reads back the same as the old key and codes."""
+        fake, gid = fake_env
+        ml = fake.add_worksheet("DS Member Log")
+        ml._rows = [
+            ["Event Date", "Member", "Did this member show up?"],
+            ["2026-05-18", "Alice", "Yes"],
+            ["2026-05-18", "Bob", "No"],
+        ]
+        slots = [
+            {"team": "A", "zone": "Power Tower", "member": m, "discord_id": "", "role": "primary"}
+            for m in ("Alice", "Bob")
+        ]
+        existing, _errs = sa.load_attendance(gid, "DS", "2026-05-18", slots=slots)
+        assert existing[("A", "Power Tower", "Alice")]["status"] == "attended"
+        assert existing[("A", "Power Tower", "Bob")]["status"] == "no_show"
+
     def test_isolates_event_dates(self, fake_env):
         fake, gid = fake_env
         ml = fake.add_worksheet("DS Member Log")
@@ -322,10 +340,11 @@ class TestSaveAttendanceWritesMemberLog:
         ml = fake.worksheet("DS Member Log")
         rows = ml.get_all_values()
         # Header + 4 member rows (Alice, Bob, Carol, Dan). The Discord ID
-        # column (#723) follows the question columns.
-        assert rows[0] == ["Event Date", "Member", "showed_up", "Discord ID"]
+        # column (#723) follows the question columns. The attendance
+        # column is headed by the preset's label, and holds words (#729).
+        assert rows[0] == ["Event Date", "Member", "Did this member show up?", "Discord ID"]
         data = {r[1]: r[2] for r in rows[1:]}
-        assert data["Alice"] == "yes"
+        assert data["Alice"] == "Yes"
         assert data["Bob"] == ""
         assert data["Carol"] == ""
         assert data["Dan"] == ""
@@ -369,9 +388,12 @@ class TestSaveAttendanceWritesMemberLog:
         on_18 = [r for r in rows[1:] if r[0] == "2026-05-18"]
         alice_18 = [r for r in on_18 if r[1] == "Alice"]
         assert len(alice_18) == 1
-        assert alice_18[0][2] == "yes"
+        assert alice_18[0][2] == "Yes"
+        # The old row is kept, its answer reworded as the tab is rewritten.
         on_25 = [r for r in rows[1:] if r[0] == "2026-05-25"]
-        assert any(r[1] == "Alice" and r[2] == "yes" for r in on_25)
+        assert any(r[1] == "Alice" and r[2] == "Yes" for r in on_25)
+        # The old key header became the label (#729).
+        assert rows[0][2] == "Did this member show up?"
 
     def test_multi_slot_attended_anywhere_collapses_to_yes(self, fake_env):
         """A member playing two slots (different zones, same team) —
@@ -393,7 +415,7 @@ class TestSaveAttendanceWritesMemberLog:
         rows = ml.get_all_values()
         alice_rows = [r for r in rows[1:] if r[1] == "Alice"]
         assert len(alice_rows) == 1
-        assert alice_rows[0][2] == "yes"
+        assert alice_rows[0][2] == "Yes"
 
     def test_multi_slot_no_show_anywhere_collapses_to_blank(self, fake_env):
         """A member playing two slots, no_show on one and unrecorded

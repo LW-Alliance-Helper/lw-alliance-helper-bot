@@ -178,9 +178,13 @@ class TestParticipationRowWrite:
         assert rows[0][3] == "Outcome"
         assert rows[0][4] == "Sitting Out"
 
-        # Data on row 2
-        assert rows[1][0] == "4/14/2026"
-        assert rows[1][1] == "DS"
+        # Data on row 2: a real date, read back as the bot reads it, and
+        # the storm's name rather than its code (#729).
+        import sheet_format
+
+        read = sheet_format.read_values(ws, storm_log.PARTICIPATION_LOG_READ, keep_text=True)
+        assert read[1][0] == "2026-04-14"
+        assert rows[1][1] == "Desert Storm"
         assert rows[1][2] == "38"
         assert rows[1][3] == "Win"
         # Roster names list joined with ", "

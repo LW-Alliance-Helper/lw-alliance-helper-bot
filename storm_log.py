@@ -18,9 +18,13 @@ CS columns:
 import asyncio
 import json
 import os
+import time
+from dataclasses import dataclass
 from datetime import date
 
 import discord
+import sheet_format
+from sheet_words import Words
 from messages import FEATURE_NOT_CONFIGURED, NOT_SET_UP
 from setup_hub import HUB_BTN_MEMBERS, STORM_SETUP_NAV
 from storm_event_hub import HUB_COMMAND, HUB_BTN_PARTICIPATION
@@ -790,6 +794,24 @@ def load_roster_from_config(guild_id: int, event_type: str) -> tuple[list[str], 
 # own column. New questions add columns; removed questions leave the
 # historical column intact but new rows don't fill it. The Trends
 # Viewer (#246) aggregates this tab across past events.
+#
+# Readable by an officer (#729): each question column is headed by the
+# question's label, not its key, and found by a hidden column tag
+# (`sheet_tags`) rather than its header text, so an officer can rename it.
+# A tab from before this has keys for headers: a column headed by a key is
+# that key's column, and the next write tags it and puts the label up.
+# Yes / no answers are written as words; Event Date is a real date.
+
+MEMBER_LOG_BASE = ["Event Date", "Member"]
+MEMBER_LOG_TAG = "member_log"
+
+# A roster multi-select answer ("did this apply to the member?") and the
+# attendance flag. Readers take either case, so old rows keep counting.
+YES_NO_WORDS = Words({"yes": "Yes", "no": "No"})
+
+# Every Member Log column is the bot's, so the tab is read unformatted:
+# Event Date comes back as `YYYY-MM-DD` whatever the alliance's locale shows.
+MEMBER_LOG_READ = sheet_format.TabSpec(date=(0,))
 
 
 def _member_log_tab_name(event_type: str) -> str:
@@ -797,10 +819,161 @@ def _member_log_tab_name(event_type: str) -> str:
 
 
 def _format_member_log_date(log_date) -> str:
-    """ISO-format the date (`YYYY-MM-DD`) so lookback-window filters in
-    the Trends Viewer can do straight string comparison instead of
-    re-parsing every row."""
+    """ISO-format the date (`YYYY-MM-DD`). Written USER_ENTERED, Sheets
+    stores it as a real date; readers get the ISO text back through
+    `sheet_format.read_values`, so lookback-window filters in the Trends
+    Viewer can still do straight string comparison."""
     return log_date.isoformat() if hasattr(log_date, "isoformat") else str(log_date)
+
+
+def _question_tag(key: str) -> dict:
+    return {"t": MEMBER_LOG_TAG, "k": "q", "q": key}
+
+
+def _attendance_label() -> str:
+    """The attendance column's header: the "Did this member show up?"
+    preset's label, which attendance shares a column with (#245)."""
+    from defaults import STORM_PARTICIPATION_PRESETS_FREE
+
+    for preset in STORM_PARTICIPATION_PRESETS_FREE:
+        if preset.get("key") == ATTENDANCE_QUESTION_KEY:
+            return preset.get("label") or ATTENDANCE_QUESTION_KEY
+    return ATTENDANCE_QUESTION_KEY
+
+
+def _member_log_questions(guild_id: int, event_type: str) -> tuple[dict, dict]:
+    """`(labels, types)` by question key, from the participation config.
+
+    The attendance column is always known, as a yes / no column under the
+    preset's label. A key the config no longer has (a removed question)
+    has no label, and its column keeps its key for a header. A config that
+    can't be read leaves every column headed as it is."""
+    labels = {ATTENDANCE_QUESTION_KEY: _attendance_label()}
+    types = {ATTENDANCE_QUESTION_KEY: "roster_multi_select"}
+    try:
+        from config import get_participation_config
+
+        questions = get_participation_config(guild_id, event_type).get("questions") or []
+    except Exception as e:
+        print(f"[MEMBER LOG] Could not read question labels for guild={guild_id}: {e}")
+        questions = []
+    for q in questions:
+        key = (q.get("key") or "").strip()
+        if not key:
+            continue
+        label = (q.get("label") or "").strip()
+        if label:
+            labels[key] = label
+        types[key] = q.get("type", "") or types.get(key, "")
+    return labels, types
+
+
+def _question_column(
+    header: list[str], tags: dict[int, dict], key: str, label: str = "", taken=()
+) -> tuple[int, bool]:
+    """Where question `key`'s column is: `(index, untagged)`, or `(-1, False)`.
+
+    By tag first. Failing that, an untagged column headed by the key (a tab
+    from before labels) or by its label (a tag that failed to write), found
+    with `untagged` True so the writer tags it. Event Date, Member, any
+    tagged column and anything in `taken` are never matched by header."""
+    for idx, tag in sorted((tags or {}).items()):
+        if tag.get("t") == MEMBER_LOG_TAG and tag.get("k") == "q" and tag.get("q") == key:
+            return idx, False
+    for text in (key, label):
+        if not text:
+            continue
+        for idx, h in enumerate(header):
+            if idx < 2 or idx in (tags or {}) or idx in taken:
+                continue
+            if h == text:
+                return idx, True
+    return -1, False
+
+
+# A reader's tag search, kept while the header reads the same, so a Trends
+# query or a stats lookup doesn't spend a search on every read. Empty
+# results are not kept: a tab with no tags yet is still found by header.
+_TAGS_TTL_S = 10 * 60
+_tags_seen: dict[tuple, tuple[float, tuple, dict]] = {}
+
+
+def _sheet_key(ws) -> tuple | None:
+    sheet_id = getattr(ws, "id", None)
+    spreadsheet = getattr(ws, "spreadsheet_id", None)
+    if not isinstance(sheet_id, int) or not isinstance(spreadsheet, str):
+        return None
+    return (spreadsheet, sheet_id)
+
+
+def _member_log_tags(ws, sh, header: list[str]) -> dict[int, dict]:
+    import sheet_identity
+
+    key = _sheet_key(ws)
+    hit = _tags_seen.get(key) if key is not None else None
+    if hit is not None and time.monotonic() - hit[0] < _TAGS_TTL_S and hit[1] == tuple(header):
+        return hit[2]
+    tags = sheet_identity.read_tags(ws, sh)
+    if key is not None and tags:
+        _tags_seen[key] = (time.monotonic(), tuple(header), tags)
+    return tags
+
+
+@dataclass
+class MemberLogTab:
+    """A Member Log tab as read, for the readers: rows with Event Date as
+    ISO text, and where its columns are."""
+
+    ws: object
+    sh: object
+    rows: list[list[str]]
+    tags: dict[int, dict]
+    guild_id: int
+    event_type: str
+
+    @property
+    def header(self) -> list[str]:
+        return self.rows[0] if self.rows else []
+
+    @property
+    def id_col(self) -> int:
+        import sheet_identity
+
+        return sheet_identity.find_column(self.header, self.tags)[0]
+
+    def column(self, key: str) -> int:
+        """Question `key`'s column, or -1. The label is only looked up when
+        neither a tag nor the key finds it."""
+        idx, _ = _question_column(self.header, self.tags, key)
+        if idx < 0:
+            label = _member_log_questions(self.guild_id, self.event_type)[0].get(key, "")
+            if label:
+                idx, _ = _question_column(self.header, self.tags, key, label)
+        return idx
+
+    def question_names(self) -> dict[int, str]:
+        """`{column: key}` for every tagged question column."""
+        return {
+            idx: tag["q"]
+            for idx, tag in self.tags.items()
+            if tag.get("t") == MEMBER_LOG_TAG and tag.get("k") == "q" and tag.get("q")
+        }
+
+
+def open_member_log(guild_id: int, event_type: str, sh=None) -> MemberLogTab | None:
+    """Read the Member Log tab, or None when it doesn't exist or has no
+    rows under its `Event Date | Member` header. A failed read raises, so
+    a caller can tell the alliance their Sheet is unreadable (#677)."""
+    sh = sh if sh is not None else _get_spreadsheet(guild_id)
+    try:
+        ws = sh.worksheet(_member_log_tab_name(event_type))
+    except Exception:
+        return None
+    rows = sheet_format.read_values(ws, MEMBER_LOG_READ)
+    if len(rows) < 2 or len(rows[0]) < 2 or rows[0][:2] != MEMBER_LOG_BASE:
+        return None
+    tags = _member_log_tags(ws, sh, rows[0])
+    return MemberLogTab(ws, sh, rows, tags, guild_id, event_type)
 
 
 def upsert_member_log_rows(
@@ -855,16 +1028,17 @@ def upsert_member_log_rows(
     # removed), or fewer (a new question added since the last write).
     # We MERGE — keep historical columns intact, append new ones at
     # the right edge. Existing data in dropped-question columns
-    # stays for officer reference.
+    # stays for officer reference. Read unformatted, so Event Date is
+    # the ISO text this compares against whatever the locale shows.
     try:
-        all_values = ws.get_all_values()
+        all_values = sheet_format.read_values(ws, MEMBER_LOG_READ)
     except Exception as e:
         print(f"[MEMBER LOG] read-before-write failed for guild={guild_id}: {e}")
         return
     existing_header = all_values[0] if all_values else []
-    base_cols = ["Event Date", "Member"]
+    base_cols = MEMBER_LOG_BASE
     if not any(existing_header):
-        header = base_cols + list(question_keys)
+        header = list(base_cols)
     else:
         header = list(existing_header)
         # Ensure the base cols are in the right place; some legacy
@@ -872,15 +1046,39 @@ def upsert_member_log_rows(
         # if the first two cols don't match, rebuild the header.
         if header[:2] != base_cols:
             header = base_cols + ([h for h in header[2:]] if len(header) >= 2 else [])
-        for qk in question_keys:
-            if qk not in header:
-                header.append(qk)
+
+    # Question columns (#729): found by tag, then by key or label; a
+    # column found by header is tagged after the write, and a header that
+    # is still the bot's old key becomes the question's label. A key with
+    # no column yet gets one at the right edge, headed by its label.
+    import sheet_identity
+    import sheet_tags
+
+    labels, types = _member_log_questions(guild_id, event_type)
+    tags = sheet_identity.read_tags(ws, sh)
+    cols: dict[str, int] = {}
+    to_tag: dict[int, dict] = {}
+    for key in dict.fromkeys(list(labels) + list(question_keys)):
+        idx, untagged = _question_column(
+            header, tags, key, labels.get(key, ""), taken=set(cols.values())
+        )
+        if idx < 0:
+            continue
+        cols[key] = idx
+        if untagged:
+            to_tag[idx] = _question_tag(key)
+        if header[idx] == key and labels.get(key, key) != key:
+            header[idx] = labels[key]
+    for key in question_keys:
+        if key not in cols:
+            cols[key] = len(header)
+            header.append(labels.get(key, key))
+            to_tag[cols[key]] = _question_tag(key)
 
     # Each row carries the member's Discord ID (#723), so a member who
     # renames between events keeps one record and a re-run finds their row.
-    import sheet_identity
-
-    id_col = sheet_identity.ensure_column(ws, header, guild_id=guild_id, sh=sh)
+    id_col = sheet_identity.ensure_column(ws, header, guild_id=guild_id, sh=sh, tags=tags)
+    sheet_tags.ensure_columns(ws, len(header))
     roster = sheet_identity.load_roster(guild_id)
     date_str = _format_member_log_date(log_date)
     batch_ids = {m: roster.id_for(m) for m in per_member_data}
@@ -917,6 +1115,9 @@ def upsert_member_log_rows(
             continue  # Rewritten below, merged with this batch.
         kept.append(row)
     sheet_identity.fill_ids(kept[1:], name_col=1, id_col=id_col, roster=roster)
+    # Old rows' yes / no answers are reworded as the tab is rewritten.
+    for row in kept[1:]:
+        _reword_answers(row, cols.values())
 
     # Append the batch's rows. Columns follow the merged header so each
     # value lands in the right cell; a key the batch sets overwrites,
@@ -924,12 +1125,14 @@ def upsert_member_log_rows(
     for member_name in sorted(per_member_data.keys()):
         member_flags = per_member_data[member_name] or {}
         old = prior.get(member_name, [])
+        by_col = {cols[k]: v for k, v in member_flags.items() if k in cols}
         row = [date_str, member_name]
-        for i, col_name in enumerate(header[2:], start=2):
-            if col_name in member_flags:
-                row.append(str(member_flags[col_name]))
+        for i in range(2, len(header)):
+            if i in by_col:
+                row.append(str(by_col[i]))
             else:
                 row.append(old[i] if i < len(old) else "")
+        _reword_answers(row, cols.values())
         identity = batch_ids[member_name] or sheet_identity.cell(old, id_col)
         sheet_identity.set_cell(row, id_col, identity)
         kept.append(row)
@@ -954,9 +1157,38 @@ def upsert_member_log_rows(
             )
         except Exception as e:
             print(f"[MEMBER LOG] trailing-blank failed: {e}")
+
+    sheet_tags.tag_columns(sh, ws, to_tag)
+    if to_tag:
+        _tags_seen.pop(_sheet_key(ws), None)
+    sheet_format.ensure_formatted(ws, _member_log_format(cols, types), sh=sh)
     print(
         f"[MEMBER LOG] {len(per_member_data)} row(s) upserted for "
         f"guild={guild_id} event={event_type} date={date_str}"
+    )
+
+
+def _reword_answers(row: list[str], columns) -> None:
+    """A row's yes / no answers as words, in place. Counts and blanks stay
+    as they are."""
+    for idx in columns:
+        if idx < len(row):
+            row[idx] = YES_NO_WORDS.reword(str(row[idx]))
+
+
+def _member_log_format(cols: dict[str, int], types: dict[str, str]) -> sheet_format.TabSpec:
+    """The Member Log's house style: Event Date a date, derived counts full
+    numbers, a Yes / No dropdown on each yes / no column, Event Date and
+    Member frozen."""
+    return sheet_format.TabSpec(
+        date=(0,),
+        quantity=tuple(sorted(i for k, i in cols.items() if types.get(k) == "derived_count")),
+        frozen_columns=2,
+        dropdowns=tuple(
+            (i, YES_NO_WORDS.options)
+            for k, i in sorted(cols.items(), key=lambda kv: kv[1])
+            if types.get(k) == "roster_multi_select"
+        ),
     )
 
 
@@ -989,33 +1221,24 @@ def read_member_log_window(
     Used by `derived_count` questions during the participation log
     (#244) and by the Trends Viewer (#246).
     """
-    sh = _get_spreadsheet(guild_id)
-    tab = _member_log_tab_name(event_type)
-    try:
-        ws = sh.worksheet(tab)
-    except Exception:
+    log = open_member_log(guild_id, event_type)
+    if log is None:
         return [], {}
-    all_values = ws.get_all_values()
-    if len(all_values) < 2:
-        return [], {}
-    header = all_values[0]
-    if len(header) < 2 or header[:2] != ["Event Date", "Member"]:
-        return [], {}
+    ws, all_values, header = log.ws, log.rows, log.header
     # Rows are keyed by the member's current roster name when the row
     # carries their Discord ID (#723), so a rename doesn't split their
     # history in two.
     import sheet_identity
 
-    id_col = sheet_identity.locate_column(ws, header, sh=sh)
+    id_col = log.id_col
     sheet_identity.maybe_stamp(ws, all_values[1:], guild_id=guild_id, name_col=1, id_col=id_col)
     roster = sheet_identity.load_roster(guild_id) if id_col >= 0 else sheet_identity.Roster()
-    # Find the column index for the question_key (if specified) so we
-    # can pluck just that value per row.
+    # Find the column for the question_key (if specified) so we can
+    # pluck just that value per row: by tag, then key, then label (#729).
     col_idx: int | None = None
     if question_key is not None:
-        try:
-            col_idx = header.index(question_key)
-        except ValueError:
+        col_idx = log.column(question_key)
+        if col_idx < 0:
             return [], {}
 
     # Collect distinct event dates, ordered newest first (string sort
@@ -1039,6 +1262,7 @@ def read_member_log_window(
         return [], {}
     date_set = set(distinct_dates)
 
+    names = log.question_names()
     rows_by_member: dict[str, dict] = {}
     for r in all_values[1:]:
         if len(r) < 2:
@@ -1054,9 +1278,10 @@ def read_member_log_window(
             val = r[col_idx] if col_idx < len(r) else ""
             rows_by_member.setdefault(member, {})[d] = val
         else:
-            # Full-row mode — return dict of column -> value per date.
+            # Full-row mode — return dict of column -> value per date,
+            # a question column under its key, any other under its header.
             cells = {
-                h: (r[i] if i < len(r) else "")
+                names.get(i, h): (r[i] if i < len(r) else "")
                 for i, h in enumerate(header)
                 if i >= 2 and i != id_col  # skip event-date, member and ID cols
             }
@@ -1095,6 +1320,43 @@ def count_member_flags_in_window(
                 c += 1
         counts[member] = c
     return counts
+
+
+# The participation tab (#729): Date is written as ISO text, which Sheets
+# takes as a real date in every locale (the old `M/D/YYYY` text read as
+# another day, or as text, outside the US), and Event as the storm's name.
+# Readers accept the old `M/D/YYYY` text and `DS` / `CS` codes too, so rows
+# from before keep working; the tab is only ever appended to, so old rows
+# stay as they were written.
+STORM_EVENT_WORDS = Words({"DS": "Desert Storm", "CS": "Canyon Storm"})
+
+# Read keeping every answer as it displays; only Date is re-read as ISO.
+PARTICIPATION_LOG_READ = sheet_format.TabSpec(date=(0,))
+
+
+def _participation_format(header: list[str]) -> sheet_format.TabSpec:
+    """The participation tab's house style: Date a date, Date and Event
+    frozen."""
+    date_col = header.index("Date") if "Date" in header else 0
+    return sheet_format.TabSpec(date=(date_col,), frozen_columns=2)
+
+
+def _parse_log_date(text: str) -> date | None:
+    """A participation row's Date: ISO (as written and read back now) or
+    the `M/D/YYYY` text rows from before #729 hold."""
+    from datetime import datetime
+
+    text = (text or "").strip()
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _read_participation_rows(ws) -> list[list[str]]:
+    return sheet_format.read_values(ws, PARTICIPATION_LOG_READ, keep_text=True)
 
 
 def append_participation_row(
@@ -1139,10 +1401,11 @@ def append_participation_row(
         if isinstance(val, list):
             val = ", ".join(str(v) for v in val)
         by_column[q.get("label", q.get("key", "?"))] = "" if val is None else val
-    by_column["Date"] = f"{log_date.month}/{log_date.day}/{log_date.year}"
-    by_column["Event"] = event_type.upper()
+    by_column["Date"] = log_date.isoformat()
+    by_column["Event"] = STORM_EVENT_WORDS.word(event_type.upper())
 
     ws.append_row(row_for_header(header, by_column), value_input_option="USER_ENTERED")
+    sheet_format.ensure_formatted(ws, _participation_format(header))
     print(
         f"[LOG] Participation row appended for guild={guild_id} "
         f"event={event_type} date={log_date.isoformat()}"
@@ -1190,28 +1453,20 @@ def list_recent_log_dates(event_type: str, n: int, guild_id=None) -> list[date]:
     out: list[date] = []
     try:
         ws = _get_log_sheet(guild_id, event_type=event_type)
-        rows = ws.get_all_values()
+        rows = _read_participation_rows(ws)
         if len(rows) <= 1:
             return out
-        from datetime import datetime
-
         seen: set[date] = set()
         parsed: list[date] = []
         for row in rows[1:]:
             if len(row) < 2:
                 continue
-            if row[1].strip().upper() != event_type.upper():
+            if STORM_EVENT_WORDS.code(row[1]) != event_type.upper():
                 continue
-            row_date = row[0].strip()
-            for fmt in ("%m/%d/%Y", "%Y-%m-%d"):
-                try:
-                    d = datetime.strptime(row_date, fmt).date()
-                    if d not in seen:
-                        seen.add(d)
-                        parsed.append(d)
-                    break
-                except ValueError:
-                    continue
+            d = _parse_log_date(row[0])
+            if d is not None and d not in seen:
+                seen.add(d)
+                parsed.append(d)
         parsed.sort(reverse=True)
         return parsed[:n]
     except Exception as e:
@@ -1230,7 +1485,7 @@ def lookup_log_entry(event_type: str, log_date: date, guild_id=None):
     """
     try:
         ws = _get_log_sheet(guild_id, event_type=event_type)
-        rows = ws.get_all_values()
+        rows = _read_participation_rows(ws)
         if len(rows) <= 1:
             return None
         header_row = rows[0]
@@ -1239,34 +1494,26 @@ def lookup_log_entry(event_type: str, log_date: date, guild_id=None):
         # to a generic name so we don't crash on malformed sheets.
         field_labels = [(h.strip() or f"Column {i + 1}") for i, h in enumerate(header_row[2:])]
 
-        from datetime import datetime
-
         for row in reversed(rows[1:]):
             if len(row) < 2:
                 continue
-            if row[1].strip().upper() != event_type.upper():
+            if STORM_EVENT_WORDS.code(row[1]) != event_type.upper():
                 continue
-            row_date = row[0].strip()
-            for fmt in ("%-m/%-d/%Y", "%m/%d/%Y", "%Y-%m-%d"):
-                try:
-                    parsed = datetime.strptime(row_date, fmt).date()
-                except ValueError:
-                    continue
-                if parsed != log_date:
-                    break
-                fields: list[tuple[str, str]] = []
-                for i, label in enumerate(field_labels):
-                    fields.append((label, row[i + 2] if len(row) > i + 2 else ""))
-                return {
-                    "date": row[0] if len(row) > 0 else "",
-                    "event": row[1] if len(row) > 1 else "",
-                    "fields": fields,
-                    # Legacy aliases for callers that haven't migrated yet:
-                    "vote_count": row[2] if len(row) > 2 else "",
-                    "rtf_no_vote": row[3] if len(row) > 3 else "",
-                    "sitting_out": row[4] if len(row) > 4 else "",
-                    "prior_no_request": row[5] if len(row) > 5 else "",
-                }
+            if _parse_log_date(row[0]) != log_date:
+                continue
+            fields: list[tuple[str, str]] = []
+            for i, label in enumerate(field_labels):
+                fields.append((label, row[i + 2] if len(row) > i + 2 else ""))
+            return {
+                "date": row[0] if len(row) > 0 else "",
+                "event": row[1] if len(row) > 1 else "",
+                "fields": fields,
+                # Legacy aliases for callers that haven't migrated yet:
+                "vote_count": row[2] if len(row) > 2 else "",
+                "rtf_no_vote": row[3] if len(row) > 3 else "",
+                "sitting_out": row[4] if len(row) > 4 else "",
+                "prior_no_request": row[5] if len(row) > 5 else "",
+            }
         return None
     except Exception as e:
         print(f"[LOG] Error looking up log entry: {e}")

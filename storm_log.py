@@ -1459,9 +1459,10 @@ async def _show_storm_log(interaction: discord.Interaction, event: str, date: st
     await interaction.response.defer()
 
     if date:
-        from train import parse_date_and_name
+        from storm_date_helpers import parse_event_date
 
-        parsed_d, _, _ = parse_date_and_name(f"{date} - placeholder")
+        # The same reader the participation log and attendance use (#725).
+        parsed_d = parse_event_date(date, look_back=True)
         if not parsed_d:
             await interaction.followup.send(
                 f"⚠️ Could not parse date **{date}**. Try a format like `April 14` or `4/14`.",

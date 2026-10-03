@@ -286,12 +286,12 @@ async def _ask_date(w: _Walk) -> date:
         return picker.picked_date
 
     raw = await w.ask_text("Type the date (e.g. `April 14`, `4/14`) or type `today`:")
-    if raw.lower() == "today":
-        # A storm is a game event, so "today" is the in-game (server) day.
-        return server_today()
-    from train import parse_date_and_name
+    from storm_date_helpers import parse_event_date
 
-    parsed, _, _ = parse_date_and_name(f"{raw} - placeholder")
+    # A log records a storm that already ran, so a date without a year is
+    # the most recent one, read the way attendance reads it (#725). "today"
+    # is the in-game (server) day.
+    parsed = parse_event_date(raw, look_back=True)
     if not parsed:
         await w.give_up(f"⚠️ Could not parse `{raw}` as a date. Run {w.log_hint} to start again.")
     return parsed

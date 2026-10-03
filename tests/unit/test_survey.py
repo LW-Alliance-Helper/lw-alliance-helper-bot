@@ -267,8 +267,8 @@ class TestUpdateSquadPowers:
         with patch("survey._get_spreadsheet", return_value=mock_sh):
             update_squad_powers("123456", "Alice", data, guild_id=TEST_GUILD_ID)
 
-        # Should call update, not append_row
-        mock_ws.update.assert_called()
+        # Writes the existing row in place, not a new one
+        mock_ws.batch_update.assert_called_once()
         mock_ws.append_row.assert_not_called()
 
     def test_dynamic_columns_match_question_keys(self, seeded_db):

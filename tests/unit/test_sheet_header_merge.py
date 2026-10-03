@@ -41,6 +41,19 @@ class FakeWS:
                 self.rows.append([])
             self.rows[start + i] = list(row)
 
+    def batch_update(self, data, value_input_option=None):
+        from gspread.utils import a1_to_rowcol
+
+        for item in data:
+            row, col = a1_to_rowcol(item["range"].split(":")[0])
+            while len(self.rows) < row:
+                self.rows.append([])
+            target = self.rows[row - 1]
+            for offset, value in enumerate(item["values"][0]):
+                while len(target) < col + offset:
+                    target.append("")
+                target[col - 1 + offset] = value
+
     def append_row(self, row, value_input_option=None):
         self.rows.append(list(row))
 
@@ -245,6 +258,50 @@ class TestSurveyResponsesTab:
         self._run(ws, [q("who", "Username")], {"who": "not-alice"})
 
         assert ws.rows[1][0] == "Alice"
+
+
+class TestResubmitKeepsLeadershipColumns:
+    """#724: a resubmit writes the survey's own cells and nothing else in the row."""
+
+    def test_an_officer_column_keeps_its_value_and_its_formula(self, seeded_db):
+        from survey import update_squad_powers
+
+        ws = FakeWS(
+            [
+                ["Username", "Discord ID", "Time Zone", "Notes", "Rank", "Date Modified"],
+                ["Alice", "111", "UTC+1", "R4 candidate", "=VLOOKUP(B2,Ranks!A:B,2,0)", "1/1/2026"],
+                ["Bob", "222", "UTC-5", "", "=VLOOKUP(B3,Ranks!A:B,2,0)", "1/2/2026"],
+            ]
+        )
+        sheet = FakeSheet(ws)
+        survey = {"tab_squad_powers": "Answers", "questions": [q("tz", "Time Zone")]}
+        with patch("survey._get_spreadsheet", return_value=sheet):
+            update_squad_powers(
+                "111", "Alice", {"tz": "UTC+2"}, guild_id=TEST_GUILD_ID, survey=survey
+            )
+
+        assert sheet.column_at("Time Zone") == ["UTC+2", "UTC-5"]
+        assert sheet.column_at("Notes") == ["R4 candidate", ""]
+        assert sheet.column_at("Rank") == [
+            "=VLOOKUP(B2,Ranks!A:B,2,0)",
+            "=VLOOKUP(B3,Ranks!A:B,2,0)",
+        ]
+        assert sheet.column_at("Date Modified")[0] != "1/1/2026"
+
+    def test_owned_columns_split_around_an_officer_column(self):
+        from survey import _owned_cell_ranges
+
+        header = ["Username", "Discord ID", "Notes", "Time Zone", "Date Modified"]
+        values = {
+            "Username": "Alice",
+            "Discord ID": "111",
+            "Time Zone": "UTC+2",
+            "Date Modified": "10/1/2026",
+        }
+        assert _owned_cell_ranges(header, values, 5) == [
+            {"range": "A5:B5", "values": [["Alice", "111"]]},
+            {"range": "D5:E5", "values": [["UTC+2", "10/1/2026"]]},
+        ]
 
 
 class TestLegacySquadPowerLabels:

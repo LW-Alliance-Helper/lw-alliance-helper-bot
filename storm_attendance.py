@@ -821,7 +821,9 @@ async def handle_storm_attendance(
             )
             return
     else:
-        parsed = parse_event_date(raw_input)
+        # Attendance is recorded after the storm, so `9/30` typed on
+        # October 1 means the one that just happened, not next year's.
+        parsed = parse_event_date(raw_input, look_back=True)
         if parsed is None:
             await interaction.response.send_message(
                 DATE_PARSE_REJECT.format(

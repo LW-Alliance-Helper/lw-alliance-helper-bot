@@ -32,6 +32,7 @@ from discord.ext import tasks
 
 import config_health
 from storm_event_hub import HUB_BTN_POST_SIGNUP
+from time_helpers import server_today
 
 logger = logging.getLogger(__name__)
 
@@ -64,8 +65,11 @@ _VALID_EVENT_TYPES = ("DS", "CS")
 def _guild_today_and_now(tz_name: str | None) -> tuple[_dt.date, _dt.time]:
     """Return today's date and the current time-of-day in the alliance's
     configured timezone. Falls back to UTC when the tz name is empty
-    or invalid — same convention as `_today_in_guild_tz` in
-    storm_signup_post."""
+    or invalid.
+
+    This is the clock the officer typed the post time in, so it decides
+    *when* to post. The storm the post is *for* is a game day and comes
+    from `server_today` instead (#726)."""
     from zoneinfo import ZoneInfo
 
     try:
@@ -213,8 +217,11 @@ async def _run_one_tick(bot: discord.Client) -> int:
             continue
 
         # The post's event_date is the next occurrence of the
-        # game-defined event day (DS=Friday, CS=Thursday).
-        event_date = next_event_date(guild_id, event_type, today=today)
+        # game-defined event day (DS=Friday, CS=Thursday), counted from
+        # the server day: an alliance whose local Friday has begun while
+        # the game's Thursday hasn't ended would otherwise post for the
+        # storm a week out (#726).
+        event_date = next_event_date(guild_id, event_type, today=server_today())
         result = await post_registration(
             bot,
             guild,

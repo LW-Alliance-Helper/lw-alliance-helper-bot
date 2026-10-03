@@ -259,7 +259,7 @@ def load_attendance(
         if not member:
             continue
         flag = member_flags.get(member, "")
-        status = flag_to_status.get(flag)
+        status = flag_to_status.get(storm_log.YES_NO_WORDS.code(flag))
         if not status:
             continue
         key = (slot.get("team", ""), slot.get("zone", ""), member)
@@ -278,8 +278,9 @@ def _read_member_log_for_date(
     event_date: str,
 ) -> dict[str, str]:
     """Read the `showed_up` column for the given event from the
-    Per-Member Log tab. Returns `{member: flag}` where flag is
-    `"yes"` / `"no"` / `""`. Empty dict when the tab doesn't exist
+    Per-Member Log tab. Returns `{member: flag}` where flag is the
+    cell as written: `"Yes"` / `"No"` / `""`, or the lowercase codes
+    rows from before #729 hold. Empty dict when the tab doesn't exist
     or has no rows for this date."""
     import config
     import storm_log
@@ -291,28 +292,21 @@ def _read_member_log_for_date(
     if sh is None:
         return {}
 
-    tab = storm_log._member_log_tab_name(event_type)
+    # Read through `storm_log.open_member_log`: Event Date comes back as
+    # ISO text whatever the alliance's locale shows, and the attendance
+    # column is found by its tag, key or label (#729).
     try:
-        ws = sh.worksheet(tab)
+        log = storm_log.open_member_log(guild_id, event_type, sh=sh)
     except Exception:
         return {}
-    try:
-        all_values = ws.get_all_values()
-    except Exception:
+    if log is None:
         return {}
-    if not all_values or len(all_values) < 2:
-        return {}
-
-    header = all_values[0]
-    if len(header) < 2 or header[:2] != ["Event Date", "Member"]:
-        return {}
-    try:
-        col_idx = header.index(storm_log.ATTENDANCE_QUESTION_KEY)
-    except ValueError:
+    col_idx = log.column(storm_log.ATTENDANCE_QUESTION_KEY)
+    if col_idx < 0:
         return {}
 
     out: dict[str, str] = {}
-    for row in all_values[1:]:
+    for row in log.rows[1:]:
         if len(row) < 2:
             continue
         if row[0] != event_date:

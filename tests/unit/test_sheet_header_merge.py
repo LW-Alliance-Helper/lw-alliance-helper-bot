@@ -457,8 +457,10 @@ class TestParticipationLog:
         ws = FakeWS([])
         sheet = self._run(ws, [q("sat", "Sat out")], {"sat": "Carol"})
 
-        assert sheet.column_at("Date") == ["8/7/2026"]
-        assert sheet.column_at("Event") == ["DS"]
+        # ISO, which Sheets takes as a real date in every locale, and the
+        # storm's name rather than its code (#729).
+        assert sheet.column_at("Date") == ["2026-08-07"]
+        assert sheet.column_at("Event") == ["Desert Storm"]
 
     def test_list_answers_are_flattened(self, seeded_db):
         ws = FakeWS([])

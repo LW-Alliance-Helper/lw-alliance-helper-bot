@@ -45,6 +45,9 @@ def _no_roster(monkeypatch):
     monkeypatch.setattr("sheet_identity.load_roster", lambda gid: sheet_identity.Roster())
     monkeypatch.setattr("sheet_identity.settings_for", lambda gid: sheet_identity.Settings())
     monkeypatch.setattr("sheet_identity.read_tags", lambda ws, sh=None: {})
+    # No configured questions unless a test says otherwise (#729): only the
+    # attendance column has a label then.
+    monkeypatch.setattr("config.get_participation_config", lambda gid, et: {"questions": []})
 
 
 def _roster(*members):
@@ -161,8 +164,8 @@ class TestUpsertMemberLogRows:
         assert update_call.args[0] == "A1"
         assert update_call.args[1] == [
             ["Event Date", "Member", "sat_out", "Discord ID"],
-            ["2026-05-22", "alice", "yes", ""],
-            ["2026-05-22", "bob", "no", ""],
+            ["2026-05-22", "alice", "Yes", ""],
+            ["2026-05-22", "bob", "No", ""],
         ]
 
     def test_existing_tab_merges_new_question_column(self):
@@ -186,7 +189,7 @@ class TestUpsertMemberLogRows:
         payload = ws.update.call_args.args[1]
         assert payload[0] == ["Event Date", "Member", "old_q", "new_q", "Discord ID"]
         # `old_q` is blank for this row (alice didn't have one this event).
-        assert payload[1] == ["2026-05-22", "alice", "", "yes", ""]
+        assert payload[1] == ["2026-05-22", "alice", "", "Yes", ""]
 
     def test_existing_tab_keeps_dropped_question_column(self):
         """A question removed from the alliance's config still keeps
@@ -210,7 +213,7 @@ class TestUpsertMemberLogRows:
         # `dropped_q` survives in the header.
         assert payload[0] == ["Event Date", "Member", "old_q", "dropped_q", "Discord ID"]
         # New rows leave it empty.
-        assert payload[1] == ["2026-05-22", "alice", "yes", "", ""]
+        assert payload[1] == ["2026-05-22", "alice", "Yes", "", ""]
 
     def test_rerun_for_same_event_replaces_member_rows(self):
         """Officer re-runs the log for the same event: the old (date,
@@ -244,9 +247,9 @@ class TestUpsertMemberLogRows:
         # rows are the new values, not duplicates of the old.
         assert payload == [
             ["Event Date", "Member", "sat_out", "Discord ID"],
-            ["2026-05-15", "alice", "yes"],
-            ["2026-05-22", "alice", "yes", ""],
-            ["2026-05-22", "bob", "no", ""],
+            ["2026-05-15", "alice", "Yes"],
+            ["2026-05-22", "alice", "Yes", ""],
+            ["2026-05-22", "bob", "No", ""],
         ]
 
     def test_attendance_after_participation_keeps_the_answers(self):
@@ -281,9 +284,17 @@ class TestUpsertMemberLogRows:
         # answers survive the attendance write that didn't carry them.
         # They used to be blanked (#714).
         payload = ws.update.call_args.args[1]
-        assert payload[0] == ["Event Date", "Member", "sat_out", "showed_up", "Discord ID"]
-        assert ["2026-05-22", "alice", "yes", "no", ""] in payload
-        assert ["2026-05-22", "bob", "no", "yes", ""] in payload
+        assert payload[0] == [
+            "Event Date",
+            "Member",
+            "sat_out",
+            "Did this member show up?",
+            "Discord ID",
+        ]
+        # `sat_out` isn't a configured question here, so the bot leaves its
+        # cells as they were; the attendance column is written in words.
+        assert ["2026-05-22", "alice", "yes", "No", ""] in payload
+        assert ["2026-05-22", "bob", "no", "Yes", ""] in payload
         assert len(payload) == 3
 
     def test_participation_after_attendance_keeps_showed_up(self):
@@ -316,11 +327,11 @@ class TestUpsertMemberLogRows:
 
         payload = ws.update.call_args.args[1]
         assert payload == [
-            ["Event Date", "Member", "sat_out", "showed_up", "Discord ID"],
-            ["2026-05-15", "bob", "yes", "no"],
-            ["2026-05-22", "alice", "no", "no", ""],
-            ["2026-05-22", "bob", "yes", "yes", ""],
-            ["2026-05-22", "carol", "no", "", ""],
+            ["Event Date", "Member", "sat_out", "Did this member show up?", "Discord ID"],
+            ["2026-05-15", "bob", "Yes", "No"],
+            ["2026-05-22", "alice", "No", "No", ""],
+            ["2026-05-22", "bob", "Yes", "Yes", ""],
+            ["2026-05-22", "carol", "No", "", ""],
         ]
 
     def test_rows_carry_the_members_discord_id(self):
@@ -340,8 +351,8 @@ class TestUpsertMemberLogRows:
                 question_keys=["sat_out"],
             )
         payload = ws.update.call_args.args[1]
-        assert payload[1] == ["2026-05-22", "Alpha", "yes", "111"]
-        assert payload[2] == ["2026-05-22", "Bravo", "no", ""]
+        assert payload[1] == ["2026-05-22", "Alpha", "Yes", "111"]
+        assert payload[2] == ["2026-05-22", "Bravo", "No", ""]
 
     def test_a_rerun_after_a_rename_replaces_the_old_row(self):
         """Alpha renamed to Charlie between the log and attendance: the
@@ -368,8 +379,8 @@ class TestUpsertMemberLogRows:
             )
         payload = ws.update.call_args.args[1]
         assert payload == [
-            ["Event Date", "Member", "sat_out", "Discord ID", "showed_up"],
-            ["2026-05-22", "Charlie", "yes", "111", "yes"],
+            ["Event Date", "Member", "sat_out", "Discord ID", "Did this member show up?"],
+            ["2026-05-22", "Charlie", "yes", "111", "Yes"],
         ]
 
     def test_someone_else_with_the_same_name_keeps_their_row(self):
@@ -394,8 +405,8 @@ class TestUpsertMemberLogRows:
                 question_keys=["sat_out"],
             )
         payload = ws.update.call_args.args[1]
-        assert ["2026-05-22", "Alpha", "yes", "999"] in payload
-        assert ["2026-05-22", "Alpha", "no", "111"] in payload
+        assert ["2026-05-22", "Alpha", "Yes", "999"] in payload
+        assert ["2026-05-22", "Alpha", "No", "111"] in payload
 
 
 class TestReadMemberLogWindow:
@@ -996,3 +1007,200 @@ class TestMemberLogRenames:
         with patch("storm_log._get_spreadsheet", return_value=sh):
             _dates, by_member = read_member_log_window(TEST_GUILD_ID, "DS", 5)
         assert by_member["Alpha"]["2026-05-22"] == {"showed_up": "yes"}
+
+
+# ── Readable Member Log (#729) ──────────────────────────────────────────────
+
+_QUESTIONS = [
+    {"key": "sat_out", "label": "Who sat out this week?", "type": "roster_multi_select"},
+    {"key": "sit_out_count_4", "label": "Sit-outs in past 4 events", "type": "derived_count"},
+]
+
+
+def _serial(iso: str) -> int:
+    return (date.fromisoformat(iso) - date(1899, 12, 30)).days
+
+
+def _unformatted_ws(rows: list[list]):
+    """A worksheet whose unformatted read shows Event Date as Sheets keeps a
+    real date: a serial number."""
+    ws = _make_ws([])
+
+    def _get(**kwargs):
+        if kwargs.get("value_render_option") == "UNFORMATTED_VALUE":
+            return [list(r) for r in rows]
+        raise AssertionError("the Member Log is read unformatted")
+
+    ws.get_all_values = MagicMock(side_effect=_get)
+    return ws
+
+
+class TestMemberLogInWords:
+    @pytest.fixture(autouse=True)
+    def _questions(self, monkeypatch):
+        monkeypatch.setattr(
+            "config.get_participation_config", lambda gid, et: {"questions": list(_QUESTIONS)}
+        )
+
+    def _write(self, ws, per_member, keys, tags=None):
+        from storm_log import upsert_member_log_rows
+
+        sh = _make_sh(ws=ws)
+        tagged: dict = {}
+        with (
+            patch("storm_log._get_spreadsheet", return_value=sh),
+            patch("sheet_identity.read_tags", return_value=dict(tags or {})),
+            patch("sheet_tags.tag_columns", side_effect=lambda s, w, t: tagged.update(t)),
+            patch("sheet_format.ensure_formatted") as fmt,
+        ):
+            upsert_member_log_rows(TEST_GUILD_ID, "DS", date(2026, 5, 22), per_member, keys)
+        return ws.update.call_args.args[1], tagged, fmt
+
+    def test_old_key_headers_become_labels_and_are_tagged(self):
+        ws = _make_ws(
+            [
+                ["Event Date", "Member", "sat_out", "sit_out_count_4"],
+                ["2026-05-15", "Alpha", "yes", "1"],
+            ]
+        )
+        payload, tagged, _ = self._write(
+            ws,
+            {"Alpha": {"sat_out": "no", "sit_out_count_4": "1"}},
+            ["sat_out", "sit_out_count_4"],
+        )
+        assert payload[0] == [
+            "Event Date",
+            "Member",
+            "Who sat out this week?",
+            "Sit-outs in past 4 events",
+            "Discord ID",
+        ]
+        assert payload[1] == ["2026-05-15", "Alpha", "Yes", "1"]
+        assert payload[2] == ["2026-05-22", "Alpha", "No", "1", ""]
+        assert tagged == {
+            2: {"t": "member_log", "k": "q", "q": "sat_out"},
+            3: {"t": "member_log", "k": "q", "q": "sit_out_count_4"},
+        }
+
+    def test_a_column_under_its_label_gets_no_duplicate(self):
+        """A tag that failed to write: the column headed by the label is
+        still that question's, and is tagged now."""
+        ws = _make_ws([["Event Date", "Member", "Who sat out this week?"]])
+        payload, tagged, _ = self._write(ws, {"Alpha": {"sat_out": "yes"}}, ["sat_out"])
+        assert payload[0] == ["Event Date", "Member", "Who sat out this week?", "Discord ID"]
+        assert payload[1] == ["2026-05-22", "Alpha", "Yes", ""]
+        assert tagged == {2: {"t": "member_log", "k": "q", "q": "sat_out"}}
+
+    def test_a_header_an_officer_changed_on_a_tagged_column_stays(self):
+        ws = _make_ws([["Event Date", "Member", "Sat out (officers)"]])
+        payload, tagged, _ = self._write(
+            ws,
+            {"Alpha": {"sat_out": "yes"}},
+            ["sat_out"],
+            tags={2: {"t": "member_log", "k": "q", "q": "sat_out"}},
+        )
+        assert payload[0] == ["Event Date", "Member", "Sat out (officers)", "Discord ID"]
+        assert payload[1] == ["2026-05-22", "Alpha", "Yes", ""]
+        assert tagged == {}
+
+    def test_only_the_old_exact_key_is_renamed(self):
+        """A header that isn't exactly the bot's old key is not the bot's:
+        it stays, and the question gets its own column."""
+        ws = _make_ws([["Event Date", "Member", "Sat_Out"]])
+        payload, tagged, _ = self._write(ws, {"Alpha": {"sat_out": "yes"}}, ["sat_out"])
+        assert payload[0] == [
+            "Event Date",
+            "Member",
+            "Sat_Out",
+            "Who sat out this week?",
+            "Discord ID",
+        ]
+        assert tagged == {3: {"t": "member_log", "k": "q", "q": "sat_out"}}
+
+    def test_a_removed_question_keeps_its_key_header(self):
+        ws = _make_ws([["Event Date", "Member", "gone_q"], ["2026-05-15", "Alpha", "yes"]])
+        payload, _, _ = self._write(ws, {"Alpha": {"sat_out": "yes"}}, ["sat_out"])
+        assert payload[0][2] == "gone_q"
+        assert payload[1] == ["2026-05-15", "Alpha", "yes"]  # not a column the bot knows
+
+    def test_the_format_spec(self):
+        ws = _make_ws([])
+        _, _, fmt = self._write(
+            ws,
+            {"Alpha": {"sat_out": "yes", "sit_out_count_4": "2"}},
+            ["sat_out", "sit_out_count_4"],
+        )
+        spec = fmt.call_args.args[1]
+        assert spec.date == (0,)
+        assert spec.quantity == (3,)
+        assert spec.frozen_columns == 2
+        assert spec.dropdowns == ((2, ("Yes", "No")),)
+
+    def test_a_real_date_matches_the_rerun_and_is_written_iso(self):
+        """Event Date as Sheets holds it once formatted (a serial number) is
+        the same event date: the re-run replaces the row, no duplicate."""
+        ws = _unformatted_ws(
+            [
+                ["Event Date", "Member", "Who sat out this week?"],
+                [_serial("2026-05-22"), "Alpha", "Yes"],
+                [_serial("2026-05-15"), "Alpha", "No"],
+            ]
+        )
+        payload, _, _ = self._write(ws, {"Alpha": {"sat_out": "no"}}, ["sat_out"])
+        assert payload[1:] == [
+            ["2026-05-15", "Alpha", "No"],
+            ["2026-05-22", "Alpha", "No", ""],
+        ]
+
+    def test_reader_finds_a_renamed_column_by_its_tag(self):
+        from storm_log import count_member_flags_in_window, read_member_log_window
+
+        ws = _unformatted_ws(
+            [
+                ["Event Date", "Member", "Sat out (officers)"],
+                [_serial("2026-05-15"), "Alpha", "Yes"],
+                [_serial("2026-05-15"), "Bravo", "No"],
+                [_serial("2026-05-22"), "Alpha", "yes"],  # an old code, still counted
+            ]
+        )
+        sh = _make_sh(ws=ws)
+        tags = {2: {"t": "member_log", "k": "q", "q": "sat_out"}}
+        with (
+            patch("storm_log._get_spreadsheet", return_value=sh),
+            patch("sheet_identity.read_tags", return_value=tags),
+        ):
+            dates, by_member = read_member_log_window(TEST_GUILD_ID, "DS", 4, "sat_out")
+            counts = count_member_flags_in_window(TEST_GUILD_ID, "DS", 4, "sat_out")
+            _d, full = read_member_log_window(TEST_GUILD_ID, "DS", 4)
+        assert dates == ["2026-05-22", "2026-05-15"]
+        assert by_member["Alpha"] == {"2026-05-15": "Yes", "2026-05-22": "yes"}
+        assert counts == {"Alpha": 2, "Bravo": 0}
+        assert full["Bravo"]["2026-05-15"] == {"sat_out": "No"}
+
+    def test_reader_finds_a_column_by_its_label(self):
+        from storm_log import read_member_log_window
+
+        ws = _make_ws(
+            [
+                ["Event Date", "Member", "Who sat out this week?"],
+                ["2026-05-15", "Alpha", "Yes"],
+            ]
+        )
+        sh = _make_sh(ws=ws)
+        with patch("storm_log._get_spreadsheet", return_value=sh):
+            _dates, by_member = read_member_log_window(TEST_GUILD_ID, "DS", 4, "sat_out")
+        assert by_member == {"Alpha": {"2026-05-15": "Yes"}}
+
+    def test_attendance_reads_through_the_label_and_real_dates(self):
+        import storm_attendance
+
+        ws = _unformatted_ws(
+            [
+                ["Event Date", "Member", "Did this member show up?"],
+                [_serial("2026-05-22"), "Alpha", "Yes"],
+                [_serial("2026-05-15"), "Bravo", "Yes"],
+            ]
+        )
+        with patch("config.get_spreadsheet", return_value=_make_sh(ws=ws)):
+            flags = storm_attendance._read_member_log_for_date(TEST_GUILD_ID, "DS", "2026-05-22")
+        assert flags == {"Alpha": "Yes"}

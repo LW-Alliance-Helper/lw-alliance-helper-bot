@@ -37,6 +37,7 @@ from typing import Optional
 
 import discord
 
+import storm_sheet_tabs
 from messages import (
     CANCEL_BACKPEDAL,
     ROUTE_HINT,
@@ -4721,28 +4722,16 @@ class _DmRosteredMembersView(OwnedView):
 from storm_roster_post import finalize_structured_roster as _finalize_structured_roster
 
 
-_ROSTERS_HEADER = [
-    "Event Date",
-    "Team",
-    "Stage",
-    "Zone",
-    "Member",
-    "Role",
-    "Power at Assignment",
-    "Discord ID",
-    "Override Below Minimum",
-    "Paired With",
-    "Posted At (UTC)",
-]
+# The Rosters tab's header, words and house style live in
+# `storm_sheet_tabs`, shared with the Map Manager write-back (#729).
+_ROSTERS_HEADER = storm_sheet_tabs.ROSTERS_HEADER
 
-# Pre-Rule-B Sheet column names → their post-rename header. The
+# Older Sheet column names → their current header. The
 # `_write_rosters_tab` header migration uses this to copy data from
 # the old column when a sheet still carries the legacy name. Readers
 # (`storm_attendance` + `storm_history`) also fall through to the
 # legacy name if the new one isn't present.
-_LEGACY_HEADER_ALIASES: dict[str, str] = {
-    "Override Below Minimum": "Override Below Floor",
-}
+_LEGACY_HEADER_ALIASES: dict[str, str] = storm_sheet_tabs.LEGACY_ALIASES
 
 
 def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
@@ -4756,9 +4745,15 @@ def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
     primary-only). If a previously-flagged member was later unassigned
     and never re-assigned, no row is written for them, so stale flags
     can't survive.
+
+    Rows hold words and are written `USER_ENTERED`, so Event Date is a
+    real date, Power a full number and Posted At a server-time
+    date-time; the tab takes the house style after its first write
+    (#729, see `storm_sheet_tabs`).
     """
-    import datetime as _dt
     import config
+    import sheet_format
+    from time_helpers import server_stamp
 
     errors: list[str] = []
     structured = config.get_structured_storm_config(session.guild_id, session.event_type)
@@ -4792,12 +4787,13 @@ def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
         # shape — so `storm_history.load_event_roster` would do
         # `header.index("Paired With")` → ValueError → `paired_with` is
         # silently empty. Detect the older header and rewrite it in
-        # place before appending new data. Use `get_all_values()[0]`
-        # rather than `row_values(1)` so the fake worksheet in tests
-        # doesn't need a new method.
+        # place before appending new data. The whole tab is read (not
+        # `row_values(1)`) because the migration rewrites every row;
+        # `read_rosters` hands dates back as ISO text whatever the
+        # alliance's locale shows (#729).
         header_read = True
         try:
-            all_values = ws.get_all_values()
+            all_values = storm_sheet_tabs.read_rosters(ws)
             existing = all_values[0] if all_values else []
         except Exception as e:
             header_read = False
@@ -4832,6 +4828,16 @@ def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
             or "Stage" not in existing
             or "Override Below Minimum" not in existing
         )
+        # "Posted At (UTC)" → "Posted At (server time)" while the cell
+        # still holds the old text, and the Discord ID column adopted as
+        # text, where it will sit after any migration, before the
+        # USER_ENTERED writes below can round an ID (#729).
+        storm_sheet_tabs.prepare_rosters(
+            ws,
+            existing,
+            guild_id=session.guild_id,
+            id_header=_ROSTERS_HEADER if needs_header_migration else None,
+        )
         if needs_header_migration:
             try:
                 old_header = list(existing)
@@ -4861,20 +4867,20 @@ def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
                             new_row.append(str(row[idx]))
                         else:
                             new_row.append("")
-                    rewritten_rows.append(new_row)
+                    rewritten_rows.append(storm_sheet_tabs.reword_roster_row(new_row))
                 # `ws.clear()` is reliable + atomic-from-the-reader's-
                 # perspective (gspread queues both calls back-to-back).
                 ws.clear()
-                ws.update("A1", rewritten_rows, value_input_option="RAW")
+                ws.update("A1", rewritten_rows, value_input_option="USER_ENTERED")
+                existing = list(_ROSTERS_HEADER)
             except Exception as e:
                 errors.append(
                     f"rosters tab header migration failed (data still "
                     f"appended, but readers may not see new columns): {e}"
                 )
 
-    from config import _utcnow_iso
-
-    posted_at = _utcnow_iso()
+    posted_at = server_stamp()
+    tabs = storm_sheet_tabs
     rows: list[list[str]] = []
     # Iterate phases the session knows about. Flat presets yield [1]
     # only — same row shape as before, with "1" written in the Phase
@@ -4892,19 +4898,17 @@ def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
                 m = session.members.get(key)
                 if not m:
                     continue
-                power = m.get("power")
-                override = "yes" if key in phase_overrides else ""
                 rows.append(
                     [
                         session.event_date or "",
                         session.team or "",
                         phase_cell,
                         z.zone,
-                        m["name"],
-                        "primary",
-                        str(power) if power is not None else "unknown",
+                        tabs.text_cell(m["name"]),
+                        tabs.ROLE_WORDS.word(tabs.ROLE_PRIMARY),
+                        tabs.power_cell(m.get("power")),
                         m.get("discord_id") or "",
-                        override,
+                        tabs.override_cell(key in phase_overrides),
                         "",  # Paired With — primary rows leave blank.
                         posted_at,
                     ]
@@ -4914,20 +4918,18 @@ def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
                     if sub_key:
                         sub_m = session.members.get(sub_key)
                         if sub_m:
-                            sub_power = sub_m.get("power")
-                            sub_override = "yes" if sub_key in phase_overrides else ""
                             rows.append(
                                 [
                                     session.event_date or "",
                                     session.team or "",
                                     phase_cell,
                                     z.zone,
-                                    sub_m["name"],
-                                    "sub",
-                                    str(sub_power) if sub_power is not None else "unknown",
+                                    tabs.text_cell(sub_m["name"]),
+                                    tabs.ROLE_WORDS.word(tabs.ROLE_SUB),
+                                    tabs.power_cell(sub_m.get("power")),
                                     sub_m.get("discord_id") or "",
-                                    sub_override,
-                                    m["name"],  # Paired With → the primary
+                                    tabs.override_cell(sub_key in phase_overrides),
+                                    tabs.text_cell(m["name"]),  # Paired With → the primary
                                     posted_at,
                                 ]
                             )
@@ -4940,16 +4942,15 @@ def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
         m = session.members.get(key)
         if not m:
             continue
-        power = m.get("power")
         rows.append(
             [
                 session.event_date or "",
                 session.team or "",
                 "",  # Phase — sub-pool rows are event-level, not phase-scoped.
                 "",
-                m["name"],
-                "sub",
-                str(power) if power is not None else "unknown",
+                tabs.text_cell(m["name"]),
+                tabs.ROLE_WORDS.word(tabs.ROLE_SUB),
+                tabs.power_cell(m.get("power")),
                 m.get("discord_id") or "",
                 "",
                 "",  # Paired With — pool subs have no specific primary.
@@ -4961,9 +4962,13 @@ def _write_rosters_tab(session: RosterBuilderSession) -> list[str]:
         return errors  # Nothing to write; treat as success.
 
     try:
-        ws.append_rows(rows, value_input_option="RAW")
+        ws.append_rows(rows, value_input_option="USER_ENTERED")
     except Exception as e:
         errors.append(f"rosters tab append failed: {e}")
+        return errors
+    sheet_format.ensure_formatted(
+        ws, storm_sheet_tabs.rosters_format(existing or list(_ROSTERS_HEADER))
+    )
     return errors
 
 

@@ -112,6 +112,8 @@ def load_rostered_slots(
     no-show subs the same way."""
     import config
 
+    import storm_sheet_tabs as tabs
+
     errors: list[str] = []
     try:
         sh = config.get_spreadsheet(guild_id)
@@ -130,7 +132,8 @@ def load_rostered_slots(
         return [], [f"rosters tab open failed: {e}"]
 
     try:
-        values = ws.get_all_values()
+        # Event Date as ISO text whatever the alliance's locale shows (#729).
+        values = tabs.read_rosters(ws)
     except Exception as e:
         return [], [f"rosters read failed: {e}"]
 
@@ -160,13 +163,9 @@ def load_rostered_slots(
     if override_col < 0:
         override_col = _col("Override Below Floor")
 
-    # Truthy values for the override column. Officers occasionally edit
-    # the Sheet by hand — accept the usual yes-set rather than only the
-    # literal "yes" that the bot writes. Matches the set used by
-    # `storm_officer_view._read_roster_rows` + `storm_roster_builder
-    # ._read_roster_powers` so an officer who writes the same literal
-    # in either Sheet gets the same interpretation.
-    truthy = {"yes", "y", "1", "true", "t", "x"}
+    # Override is "Yes" since #729 and "yes" before it; officers
+    # occasionally edit it by hand, so `is_override` accepts the usual
+    # yes-set. Role is "Primary" / "Sub" since #729, codes before it.
 
     slots: list[dict] = []
     # Dedupe by `(team, zone, member)` so a phase-aware preset with a
@@ -200,8 +199,8 @@ def load_rostered_slots(
                 "zone": _cell(zone_col),
                 "member": member,
                 "discord_id": _cell(id_col),
-                "role": _cell(role_col) or "primary",
-                "override_below_floor": _cell(override_col).lower() in truthy,
+                "role": tabs.ROLE_WORDS.code(_cell(role_col)) or tabs.ROLE_PRIMARY,
+                "override_below_floor": tabs.is_override(_cell(override_col)),
             }
         )
     return slots, errors

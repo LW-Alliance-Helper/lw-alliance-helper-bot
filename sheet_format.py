@@ -290,13 +290,19 @@ def _read_header_format(sh, ws) -> bool | None:
 _SERIAL_EPOCH = datetime(1899, 12, 30)
 
 
-def read_values(ws, spec: TabSpec) -> list[list[str]]:
+def read_values(ws, spec: TabSpec, *, keep_text: bool = False) -> list[list[str]]:
     """`ws.get_all_values()`, with the spec's date and date-time columns as
     `YYYY-MM-DD` and `YYYY-MM-DD HH:MM:SS` text whatever the locale shows.
 
-    Every other cell comes back as the text it holds; a number as its
-    digits. A worksheet that can't read unformatted (a test double) is
-    read as before."""
+    By default the whole tab is read unformatted in one call: right for a tab
+    whose every column is the bot's, where a number reads as its digits.
+    `keep_text=True` is for a tab that also holds the alliance's own columns
+    (the roster, Squad Powers): every cell reads exactly as it displays, and
+    only the date columns are read a second time, unformatted. A worksheet
+    that can't read unformatted (a test double) is read as before."""
+    dates, stamps = set(spec.date), set(spec.datetime)
+    if keep_text:
+        return _read_keeping_text(ws, dates, stamps)
     try:
         rows = ws.get_all_values(
             value_render_option="UNFORMATTED_VALUE",
@@ -304,7 +310,6 @@ def read_values(ws, spec: TabSpec) -> list[list[str]]:
         )
     except TypeError:
         return ws.get_all_values()
-    dates, stamps = set(spec.date), set(spec.datetime)
     out: list[list[str]] = []
     for r, row in enumerate(rows):
         cells = []
@@ -316,6 +321,39 @@ def read_values(ws, spec: TabSpec) -> list[list[str]]:
             else:
                 cells.append(_text(value))
         out.append(cells)
+    return out
+
+
+def _read_keeping_text(ws, dates: set[int], stamps: set[int]) -> list[list[str]]:
+    rows = ws.get_all_values()
+    columns = sorted(dates | stamps)
+    if not columns or len(rows) < 2:
+        return rows
+    letters = [_letter(c + 1) for c in columns]
+    try:
+        ranges = ws.batch_get(
+            [f"{x}2:{x}" for x in letters],
+            value_render_option="UNFORMATTED_VALUE",
+            date_time_render_option="SERIAL_NUMBER",
+        )
+    except Exception as e:
+        print(f"[SHEET FORMAT] Could not read dates on '{getattr(ws, 'title', '?')}': {e}")
+        return rows
+    for col, values in zip(columns, ranges):
+        convert = date_cell if col in dates else stamp_cell
+        for offset, cell in enumerate(values or []):
+            row = rows[offset + 1] if offset + 1 < len(rows) else None
+            if row is None or col >= len(row):
+                continue
+            row[col] = convert(cell[0] if cell else "")
+    return rows
+
+
+def _letter(n: int) -> str:
+    out = ""
+    while n > 0:
+        n, rem = divmod(n - 1, 26)
+        out = chr(65 + rem) + out
     return out
 
 

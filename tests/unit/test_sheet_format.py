@@ -205,3 +205,22 @@ def test_dropdowns_list_the_words_and_flag_rather_than_refuse():
     }
     assert [v["userEnteredValue"] for v in dv["rule"]["condition"]["values"]] == ["Auto", "VS"]
     assert dv["rule"]["strict"] is False and dv["rule"]["showCustomUi"] is True
+
+
+def test_keep_text_reads_alliance_columns_as_shown_and_only_dates_unformatted():
+    class WS:
+        def get_all_values(self, **kw):
+            assert kw == {}
+            return [
+                ["Name", "Joined", "Power"],
+                ["Alpha", "9/28/2026", "123.4M"],
+                ["Bravo", "28/09/2026", "5,000"],
+            ]
+
+        def batch_get(self, ranges, **kw):
+            assert ranges == ["B2:B"] and kw["value_render_option"] == "UNFORMATTED_VALUE"
+            return [[[46293], [46293]]]
+
+    rows = sf.read_values(WS(), sf.TabSpec(date=(1,)), keep_text=True)
+    assert rows[1] == ["Alpha", "2026-09-28", "123.4M"]
+    assert rows[2] == ["Bravo", "2026-09-28", "5,000"]

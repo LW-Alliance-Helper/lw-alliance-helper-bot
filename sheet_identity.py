@@ -473,6 +473,39 @@ def ensure_column(
     return idx
 
 
+# Tabs whose own ID columns have been adopted in this process.
+_adopted: set[tuple] = set()
+
+
+def adopt_columns(ws, columns: list[int], *, guild_id: int, sh=None, header_row: int = 1) -> None:
+    """Adopt Discord ID columns a tab already has at fixed places (#723/#729).
+
+    For a tab whose layout puts its IDs where the bot always writes them
+    (Buddy's three, a Rosters or Signups tab's voter column) rather than in
+    one column `ensure_column` adds. Each column is tagged, so the show / hide
+    setting reaches it, and formatted as text, so an ID is never rounded. Its
+    visibility follows the alliance's answer once they have given one. Runs
+    once per tab per process; columns already tagged are left alone."""
+    key = _sheet_key(ws)
+    if key is not None and key in _adopted:
+        return
+    sheet_id = getattr(ws, "id", None)
+    if sheet_id is None:
+        return
+    tags = read_tags(ws, sh)
+    settings = settings_for(guild_id)
+    hide = (not settings.shown) if settings.answered else None
+    requests: list[dict] = []
+    for idx in columns:
+        if idx < 0 or is_id_tag(tags.get(idx) or {}):
+            continue
+        requests += _column_requests(sheet_id, idx, header_row, hide=hide)
+    if requests:
+        _apply(ws, sh, requests, "adopt")
+    if key is not None:
+        _adopted.add(key)
+
+
 def _column_requests(sheet_id, idx: int, header_row: int, *, hide: bool | None) -> list[dict]:
     """Tag, text format and (optionally) visibility for one ID column."""
     if sheet_id is None:

@@ -14,6 +14,7 @@ GID = 4242
 def _fresh_caches(monkeypatch):
     monkeypatch.setattr(si, "_found", {})
     monkeypatch.setattr(si, "_last_stamped", {})
+    monkeypatch.setattr(si, "_adopted", set())
 
 
 class FakeSpreadsheet:
@@ -428,3 +429,33 @@ def test_the_id_tab_never_gets_a_second_column():
     ):
         si.alliance_tab_column(ws, ws.rows, guild_id=GID, name_col=1, first_row=2)
     assert ws.cell_writes == [] and ws.spreadsheet.requests == []
+
+
+# ── Adopting ID columns a layout already has ─────────────────────────────────
+
+
+def test_adopt_columns_tags_and_formats_each_once():
+    ws = FakeWS([["Discord ID", "Name", "Profession", "Discord ID", "Name"]])
+    with (
+        patch.object(si, "read_tags", return_value={3: dict(si.TAG)}),
+        patch.object(si, "settings_for", return_value=si.Settings()),
+    ):
+        si.adopt_columns(ws, [0, 3], guild_id=GID)
+        si.adopt_columns(ws, [0, 3], guild_id=GID)  # same process: nothing more
+    metas = _requests_of(ws, "createDeveloperMetadata")
+    assert [m["developerMetadata"]["location"]["dimensionRange"]["startIndex"] for m in metas] == [
+        0
+    ]
+    assert len(_requests_of(ws, "repeatCell")) == 1
+    assert _requests_of(ws, "updateDimensionProperties") == []  # unanswered: visibility untouched
+
+
+def test_adopt_columns_follow_an_answered_setting():
+    ws = FakeWS([["Voter Discord ID"]])
+    with (
+        patch.object(si, "read_tags", return_value={}),
+        patch.object(si, "settings_for", return_value=si.Settings(shown=False, answered=True)),
+    ):
+        si.adopt_columns(ws, [0], guild_id=GID)
+    (vis,) = _requests_of(ws, "updateDimensionProperties")
+    assert vis["properties"] == {"hiddenByUser": True}

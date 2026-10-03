@@ -294,7 +294,7 @@ class TestCheckAndAddBirthdays:
         from train import check_and_add_birthdays
         from config import save_birthday_config
 
-        today = server_today()
+        today = _alliance_today()
         target = today + timedelta(days=7)
         save_birthday_config(TEST_GUILD_ID, "Members", 0, 1, 2, 1, 1, 0, 14)
 

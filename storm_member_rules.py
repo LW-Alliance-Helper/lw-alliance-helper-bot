@@ -18,10 +18,14 @@ Sheet shape (`DS Member Rules` / `CS Member Rules`):
     Rule Type | Subject | Sub-Type | Value | Notes
 
 Where:
-  power_band rows:  Rule Type=power_band | Subject=<int power> | Sub-Type='' |
+  power_band rows:  Rule Type=Power band | Subject=<int power> | Sub-Type='' |
                     Value=<zone name>    | Notes=<free text>
-  per_member rows:  Rule Type=per_member | Subject=<member name> |
-                    Sub-Type=<team|zone> | Value=<…> | Notes=<…>
+  per_member rows:  Rule Type=Per member | Subject=<member name> |
+                    Sub-Type=<Team|Zone> | Value=<…> | Notes=<…>
+
+The Rule Type and Sub-Type cells hold the words Discord shows (#729); the
+codes (`power_band`, `team`, ...) stay in the code and on `Rule` objects.
+Rows written before #729 hold the codes and read the same.
 
 Stored Subject for power_band is the raw integer (e.g. "80000000") so
 sorting works at the Sheet level. The slash command accepts shorthand
@@ -34,8 +38,11 @@ import asyncio
 import logging
 
 import discord
+from gspread.utils import rowcol_to_a1
 
+import sheet_format
 from messages import CANCEL_BACKPEDAL_DEFAULT, NOT_SET_UP, ROUTE_HINT
+from sheet_words import Words
 from storm_event_hub import HUB_COMMAND, HUB_BTN_RULES
 from wizard_registry import OwnedView
 
@@ -59,6 +66,27 @@ _RULE_TYPE_PER_MEMBER = "per_member"
 
 _PER_MEMBER_SUB_TYPES = ("team", "zone")
 _TEAMS = ("A", "B")
+
+# ── Words in the cells (#729) ────────────────────────────────────────────────
+# The tab holds the words the add buttons use ("Add a power-band rule" /
+# "Add a per-member rule"), never the codes above. Each reads back the code
+# from the word or the old code, in any case, so rows from before #729 keep
+# working; their cells are reworded the next time a rule is saved.
+
+RULE_TYPE_WORDS = Words(
+    {_RULE_TYPE_POWER_BAND: "Power band", _RULE_TYPE_PER_MEMBER: "Per member"},
+    also={"power-band": _RULE_TYPE_POWER_BAND, "per-member": _RULE_TYPE_PER_MEMBER},
+)
+SUB_TYPE_WORDS = Words({"team": "Team", "zone": "Zone"})
+
+# How the house-style pass formats the tab: Subject as plain text (it holds
+# names, Discord IDs and power thresholds, and a typed ID must never round),
+# dropdowns of the words on the two columns officers can edit by hand. The
+# Discord ID column is `sheet_identity`'s, formatted when it is added.
+RULES_FORMAT = sheet_format.TabSpec(
+    text=(1,),
+    dropdowns=((0, RULE_TYPE_WORDS.options), (2, SUB_TYPE_WORDS.options)),
+)
 
 
 # ── Subject resolution (#136) ────────────────────────────────────────────────
@@ -299,15 +327,29 @@ def list_rules(guild_id: int, event_type: str) -> list[Rule]:
     ws = _get_or_create_rules_worksheet(guild_id, event_type)
     if ws is None:
         return []
+    _values, located = _read_rules(ws, guild_id, event_type)
+    return [rule for _row, rule in located]
+
+
+def _read_rules(
+    ws, guild_id: int, event_type: str
+) -> tuple[list[list[str]], list[tuple[int, Rule]]]:
+    """The tab as read, and each rule with the sheet row it sits on.
+
+    A blank row, or one whose Rule Type is neither rule type, is skipped,
+    so after one a rule's `list_rules` index and its sheet row part ways:
+    `delete_rule_at` deletes by the row. Rule Type and Sub-Type are read
+    through their words, so a word, an old code or either in any case
+    reads as the code (#729)."""
     try:
         values = ws.get_all_values()
     except Exception as e:
         logger.warning(
             "[STORM RULES] list_rules failed for guild=%s event=%s: %s", guild_id, event_type, e
         )
-        return []
+        return [], []
     if not values:
-        return []
+        return [], []
 
     header = [c.strip() for c in values[0]]
     import sheet_identity
@@ -345,14 +387,14 @@ def list_rules(guild_id: int, event_type: str) -> list[Rule]:
     else:
         _translate_legacy_cs_zone = None
 
-    rules: list[Rule] = []
-    for row in values[1:]:
+    located: list[tuple[int, Rule]] = []
+    for offset, row in enumerate(values[1:]):
         if not row or not any(c.strip() for c in row):
             continue
-        rule_type = _cell(row, type_col).lower()
+        rule_type = RULE_TYPE_WORDS.code(_cell(row, type_col))
         if rule_type not in (_RULE_TYPE_POWER_BAND, _RULE_TYPE_PER_MEMBER):
             continue
-        sub_type = _cell(row, subtype_col).lower()
+        sub_type = SUB_TYPE_WORDS.code(_cell(row, subtype_col))
         value = _cell(row, value_col)
         # Per-member zone rules + power-band rules both carry a zone
         # name in the Value column. Translate legacy CS keys for
@@ -374,17 +416,48 @@ def list_rules(guild_id: int, event_type: str) -> list[Rule]:
         if rule_type == _RULE_TYPE_PER_MEMBER and identity.isdigit():
             # Matched by Discord ID from here on, whatever the row's name.
             subject = identity
-        rules.append(
-            Rule(
-                rule_type=rule_type,
-                subject=subject,
-                sub_type=sub_type,
-                value=value,
-                notes=_cell(row, notes_col),
-                discord_id=identity,
+        located.append(
+            (
+                offset + 2,
+                Rule(
+                    rule_type=rule_type,
+                    subject=subject,
+                    sub_type=sub_type,
+                    value=value,
+                    notes=_cell(row, notes_col),
+                    discord_id=identity,
+                ),
             )
         )
-    return rules
+    return values, located
+
+
+def _reword_cells(ws, values: list[list[str]]) -> None:
+    """Rewrite each Rule Type and Sub-Type cell still holding a code as its
+    word (#729), in one call. The tab is only ever appended to, never
+    rewritten, so a save is where rows from before #729 lose their codes.
+    A cell holding anything else is left as typed. Best-effort."""
+    if not values:
+        return
+    header = [str(c).strip() for c in values[0]]
+    columns = [
+        (header.index(name), words)
+        for name, words in (("Rule Type", RULE_TYPE_WORDS), ("Sub-Type", SUB_TYPE_WORDS))
+        if name in header
+    ]
+    updates = []
+    for offset, row in enumerate(values[1:]):
+        for col, words in columns:
+            text = str(row[col]) if col < len(row) else ""
+            word = words.reword(text)
+            if word != text:
+                updates.append({"range": rowcol_to_a1(offset + 2, col + 1), "values": [[word]]})
+    if not updates:
+        return
+    try:
+        ws.batch_update(updates, value_input_option="RAW")
+    except Exception as e:
+        logger.warning("[STORM RULES] could not reword %d cell(s): %s", len(updates), e)
 
 
 def _rows_equivalent(rule: Rule, candidate: Rule) -> bool:
@@ -405,7 +478,10 @@ def save_rule(guild_id: int, event_type: str, rule: Rule) -> tuple[bool, str]:
 
     A per-member rule's row carries the member's Discord ID (#723): the
     picked member's own, or the roster's for a typed name. The duplicate
-    check compares by that ID, as `list_rules` reads rules back."""
+    check compares by that ID, as `list_rules` reads rules back.
+
+    The row is written in words (#729); after it, any older row's codes
+    become words and the tab gets the house style, once."""
     import sheet_identity
 
     identity = ""
@@ -420,15 +496,21 @@ def save_rule(guild_id: int, event_type: str, rule: Rule) -> tuple[bool, str]:
         rule.sub_type,
         rule.notes,
     )
-    existing = list_rules(guild_id, event_type)
-    for r in existing:
-        if _rows_equivalent(r, as_read):
-            return False, "A matching rule already exists. Clear it first to update."
-
     ws = _get_or_create_rules_worksheet(guild_id, event_type)
     if ws is None:
         return False, NOT_SET_UP
-    row = [rule.rule_type, rule.subject, rule.sub_type, rule.value, rule.notes]
+    values, located = _read_rules(ws, guild_id, event_type)
+    for _row, r in located:
+        if _rows_equivalent(r, as_read):
+            return False, "A matching rule already exists. Clear it first to update."
+
+    row = [
+        RULE_TYPE_WORDS.word(rule.rule_type),
+        rule.subject,
+        SUB_TYPE_WORDS.word(rule.sub_type),
+        rule.value,
+        rule.notes,
+    ]
     if rule.rule_type == _RULE_TYPE_PER_MEMBER:
         try:
             header = ws.row_values(1)
@@ -443,6 +525,8 @@ def save_rule(guild_id: int, event_type: str, rule: Rule) -> tuple[bool, str]:
             "[STORM RULES] save_rule failed for guild=%s event=%s: %s", guild_id, event_type, e
         )
         return False, "Couldn't write to the Sheet (see logs for details)."
+    _reword_cells(ws, values)
+    sheet_format.ensure_formatted(ws, RULES_FORMAT)
     return True, "Rule saved."
 
 
@@ -455,32 +539,18 @@ def delete_rule_at(guild_id: int, event_type: str, index: int) -> bool:
     deleting different rules at the same time can clobber each other's
     work via the standard last-write-wins race.
 
-    Re-checks the rule list and the Sheet row count immediately before
-    issuing the delete so a stale view doesn't drop the wrong row.
+    Re-reads the tab immediately before issuing the delete so a stale
+    view doesn't drop the wrong row, and deletes the sheet row the rule
+    was read from: a blank or non-rule row above it would put `2 + index`
+    on a different rule.
     """
     ws = _get_or_create_rules_worksheet(guild_id, event_type)
     if ws is None:
         return False
-    rules = list_rules(guild_id, event_type)
-    if index < 0 or index >= len(rules):
+    _values, located = _read_rules(ws, guild_id, event_type)
+    if index < 0 or index >= len(located):
         return False
-
-    try:
-        row_count = len(ws.get_all_values())
-    except Exception as e:
-        logger.warning(
-            "[STORM RULES] delete row-count read failed for guild=%s event=%s: %s",
-            guild_id,
-            event_type,
-            e,
-        )
-        return False
-
-    # Sheet is 1-indexed; row 1 is the header, row (2 + index) is the
-    # target data row.
-    target_row = 2 + index
-    if target_row > row_count:
-        return False
+    target_row = located[index][0]
 
     try:
         ws.delete_rows(target_row)

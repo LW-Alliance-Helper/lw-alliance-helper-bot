@@ -192,3 +192,16 @@ def test_server_stamp_is_server_time_without_a_zone():
 
     moment = datetime(2026, 9, 28, 22, 0, 5, tzinfo=timezone.utc)
     assert server_stamp(moment) == "2026-09-28 20:00:05"
+
+
+def test_dropdowns_list_the_words_and_flag_rather_than_refuse():
+    spec = sf.TabSpec(dropdowns=((2, ("Auto", "VS")),))
+    (dv,) = _by_kind(sf.format_requests(5, spec), "setDataValidation")
+    assert dv["range"] == {
+        "sheetId": 5,
+        "startRowIndex": 1,
+        "startColumnIndex": 2,
+        "endColumnIndex": 3,
+    }
+    assert [v["userEnteredValue"] for v in dv["rule"]["condition"]["values"]] == ["Auto", "VS"]
+    assert dv["rule"]["strict"] is False and dv["rule"]["showCustomUi"] is True

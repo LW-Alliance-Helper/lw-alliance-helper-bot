@@ -74,6 +74,8 @@ class FakeWS:
             row = self.rows[int(ref[1:]) - 1]
             row.extend([""] * (col + 1 - len(row)))
             row[col] = item["values"][0][0]
+            if int(ref[1:]) == 1:
+                self.header = list(row)
 
 
 @pytest.fixture
@@ -440,8 +442,8 @@ def test_new_member_rules_tab_gets_an_id_column(patched_tab):
     with patch("sheet_identity.load_roster", return_value=_roster(("111", "Alpha"))):
         tr.set_member_rule(GID, "Train Member Rules", "Alpha", tr.MEMBER_RULE_OPT_OUT)
     ws = patched_tab["Train Member Rules"]
-    assert ws.header == ["Member", "Rule Type", "Value", "Notes", "Discord ID"]
-    assert ws.rows[1] == ["Alpha", "opt_out", "", "", "111"]
+    assert ws.header == ["Member", "Rule Type", "Skip Until", "Notes", "Discord ID"]
+    assert ws.rows[1] == ["Alpha", "Opted out", "", "", "111"]
 
 
 def test_an_opt_out_keeps_applying_after_a_rename(patched_tab):
@@ -483,8 +485,8 @@ def test_a_rule_written_before_ids_gets_one_on_the_next_write(patched_tab):
     with patch("sheet_identity.load_roster", return_value=roster):
         tr.set_member_rule(GID, "Train Member Rules", "Charlie", tr.MEMBER_RULE_OPT_OUT)
     ws = patched_tab["Train Member Rules"]
-    assert ws.rows[1] == ["Alpha", "opt_out", "", "", "111"]
-    assert ws.rows[2] == ["Charlie", "opt_out", "", "", "222"]
+    assert ws.rows[1] == ["Alpha", "Opted out", "", "", "111"]
+    assert ws.rows[2] == ["Charlie", "Opted out", "", "", "222"]
 
 
 def test_a_rule_written_before_ids_is_stamped_when_read(patched_tab, monkeypatch):
@@ -538,3 +540,78 @@ def test_history_is_kept_in_date_order(patched_tab):
     )
     dates = [r[0] for r in patched_tab["Train History"].rows[1:]]
     assert dates == ["2026-06-01", "2026-06-02", "2026-06-03"]
+
+
+# ── Words, not codes (#729) ──────────────────────────────────────────────────
+
+
+def test_history_is_written_in_words_and_read_back_as_codes(patched_tab):
+    tr.set_day_status(
+        GID, "Train History", "2026-06-01", member="Alpha", reason="vs", status="posted"
+    )
+    ws = patched_tab["Train History"]
+    assert ws.rows[1][2:4] == ["VS", "Posted"]
+    (row,) = tr.load_history(GID, "Train History")
+    assert (row.reason, row.status) == ("vs", "posted")
+
+
+def test_old_codes_still_read_and_are_reworded_on_the_next_write(patched_tab):
+    patched_tab["Train History"] = FakeWS(
+        ["Date", "Member", "Reason", "Status", "Posted At", "Notes"],
+        [
+            ["2026-05-01", "Alpha", "auto", "posted", "", ""],
+            ["2026-05-02", "Bravo", "Leadership role", "POSTED", "", ""],
+        ],
+    )
+    loaded = tr.load_history(GID, "Train History")
+    assert [(h.reason, h.status) for h in loaded] == [("auto", "posted"), ("leadership", "posted")]
+    tr.set_day_status(
+        GID, "Train History", "2026-05-03", member="Charlie", reason="auto", status="scheduled"
+    )
+    ws = patched_tab["Train History"]
+    assert [r[2:4] for r in ws.rows[1:]] == [
+        ["Auto", "Posted"],
+        ["Leadership", "Posted"],
+        ["Auto", "Scheduled"],
+    ]
+    # The old header is renamed; the bot never touches one an officer changed.
+    assert ws.header[4] == "Posted At (server time)"
+
+
+def test_a_header_an_officer_renamed_stays_theirs(patched_tab):
+    patched_tab["Train History"] = FakeWS(
+        ["Date", "Member", "Reason", "Status", "When we posted", "Notes"]
+    )
+    tr.set_day_status(
+        GID, "Train History", "2026-05-03", member="Alpha", reason="auto", status="posted"
+    )
+    assert patched_tab["Train History"].header[4] == "When we posted"
+
+
+def test_a_typed_rule_type_label_is_read_as_that_rule(patched_tab):
+    """The audit found "Specific member" typed into Day Rules read as auto."""
+    patched_tab["Train Day Rules"] = FakeWS(
+        tr.DAY_RULES_HEADER,
+        [["Standard Week", "Friday", "specific member", "Alpha", ""]],
+    )
+    preset = tr.load_preset(GID, "Train Day Rules", "Standard Week")
+    assert preset.days[4].rule_type == tr.RULE_SPECIFIC
+
+
+def test_day_rules_are_written_in_the_preset_editors_words(patched_tab):
+    preset = SchedulePreset.default("Standard Week")
+    preset.days[2] = DayRule(2, tr.RULE_VS)
+    tr.save_preset(GID, "Train Day Rules", preset)
+    rows = patched_tab["Train Day Rules"].rows[1:]
+    assert rows[2][2] == "VS (you assign)"
+    assert rows[0][2] == "Auto (fair rotation)"
+    assert tr.load_preset(GID, "Train Day Rules", "Standard Week").days[2].rule_type == tr.RULE_VS
+
+
+def test_member_rule_words_round_trip(patched_tab):
+    tr.set_member_rule(GID, "Train Member Rules", "Alpha", tr.MEMBER_RULE_SKIP_UNTIL, "2026-07-01")
+    assert patched_tab["Train Member Rules"].rows[1][1] == "Skipped until"
+    (rule,) = tr.load_member_rules(GID, "Train Member Rules")
+    assert (rule.rule_type, rule.value) == (tr.MEMBER_RULE_SKIP_UNTIL, "2026-07-01")
+    tr.clear_member_rule(GID, "Train Member Rules", "Alpha", tr.MEMBER_RULE_SKIP_UNTIL)
+    assert tr.load_member_rules(GID, "Train Member Rules") == []

@@ -87,11 +87,23 @@ def test_preview_train_history(seeded_db, test_spreadsheet, monkeypatch):
             ],
         )
 
+    # The writers formatted the tab on its first write; a second pass is a no-op.
     ws = sh.worksheet(title)
-    assert sheet_format.ensure_formatted(ws, tr.HISTORY_FORMAT) is True
+    assert sheet_format.ensure_formatted(ws, tr.HISTORY_FORMAT) is False
 
     rows = ws.get_all_values()
+    assert rows[0][:6] == tr.HISTORY_HEADER
     assert [r[1] for r in rows[1:]] == ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "", "Foxtrot"]
+    assert [r[2] for r in rows[1:]] == [
+        "Auto",
+        "VS",
+        "Birthday",
+        "Leadership",
+        "Auto",
+        "VS",
+        "Contest",
+    ]
+    assert [r[3] for r in rows[1:]] == ["Posted"] * 4 + ["Scheduled"] * 3
     assert rows[0][6] == "Discord ID" and rows[1][6] == "100000000000000001"
     # The Date column now shows the locale's format, not the ISO text...
     assert rows[1][0] != "2026-09-28"
@@ -103,6 +115,7 @@ def test_preview_train_history(seeded_db, test_spreadsheet, monkeypatch):
     assert history["Alpha"].posted_at == "2026-09-28 20:00:05"  # old UTC text, in server time
     assert history["Bravo"].posted_at == "2026-09-29 20:00:12"  # a real date-time cell
     assert history["Echo"].date == "2026-10-02" and history["Echo"].posted_at == ""
+    assert (history["Bravo"].reason, history["Bravo"].status) == ("vs", "posted")
 
     meta = _meta(sh, title)
     grid = meta["properties"]["gridProperties"]

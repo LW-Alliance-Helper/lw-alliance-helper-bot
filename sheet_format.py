@@ -15,6 +15,7 @@ Sheet tabs), taken from Kevin's own alliance sheet:
 - Quantities `#,##0`; identifiers plain text; dates and times in Sheets'
   built-in Date / Time / Date time formats, so each alliance's locale
   renders them.
+- A dropdown of the words on each column officers edit by hand.
 
 **Once per tab, never over an officer's styling.** The pass runs the first
 time the bot writes a tab after this shipped, and marks the tab with a
@@ -66,6 +67,10 @@ class TabSpec:
     time: tuple[int, ...] = ()
     datetime: tuple[int, ...] = ()
     frozen_columns: int = 0
+    # (column, words): a dropdown of the words on a column officers edit by
+    # hand (`sheet_words.Words.options`). Not strict: a cell holding
+    # something else is flagged, never refused, so old rows stand.
+    dropdowns: tuple[tuple[int, tuple[str, ...]], ...] = ()
 
 
 def format_requests(sheet_id: int, spec: TabSpec) -> list[dict]:
@@ -126,6 +131,27 @@ def format_requests(sheet_id: int, spec: TabSpec) -> list[dict]:
                     }
                 }
             )
+    for col, options in spec.dropdowns:
+        requests.append(
+            {
+                "setDataValidation": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": 1,
+                        "startColumnIndex": col,
+                        "endColumnIndex": col + 1,
+                    },
+                    "rule": {
+                        "condition": {
+                            "type": "ONE_OF_LIST",
+                            "values": [{"userEnteredValue": o} for o in options],
+                        },
+                        "showCustomUi": True,
+                        "strict": False,
+                    },
+                }
+            }
+        )
     requests.append(
         {
             "updateSheetProperties": {

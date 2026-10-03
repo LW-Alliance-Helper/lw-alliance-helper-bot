@@ -14,6 +14,10 @@ Storage shape (Sheet, alliance-owned, source of truth):
   CS Strategies columns:
     Preset Name | Zone | Max Players | Min Power A | Min Power B | Priority | Faction
 
+(plus the per-stage caps and priorities and Stage Count; see `_DS_HEADER`.)
+Capacities, power floors and priorities are real numbers, and Stage Count
+holds the editor's words ("Flat", "2 Stages (S1 + S2)") (#729).
+
 Preset names are unique per (guild, event_type). Rows for one preset
 share the Preset Name value.
 
@@ -29,6 +33,9 @@ from __future__ import annotations
 
 import logging
 import re
+
+import sheet_format
+from sheet_words import Words
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +134,8 @@ def _safe_int(value, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         try:
-            return int(float(value))
+            # A thousands separator from a cell typed as text ("1,000").
+            return int(float(str(value).replace(",", "")))
         except (TypeError, ValueError):
             return default
 
@@ -523,6 +531,125 @@ _CS_HEADER = [
     "Stage Count",
 ]
 
+# ── Words and numbers in the cells (#729) ────────────────────────────────────
+# Stage Count holds the words the preset editor's embed shows (storm_strategy_ui
+# `_build_editor_embed`), never the digits it used to. The digits, the words in
+# any case and the stage picker's shorter labels all read back, so presets
+# saved before #729 keep loading; a tab's rows get the words on its next save.
+# The capacities, power floors and priorities are written as real numbers,
+# and every read is unformatted, so the "300,000,000" an officer sees reads as
+# 300000000.
+
+STAGE_COUNT_WORDS = Words(
+    {"0": "Flat", "2": "2 Stages (S1 + S2)", "3": "3 Stages (S1 + S2 + S3)"},
+    also={
+        "flat (no stages)": "0",
+        "2 stages": "2",
+        "3 stages": "3",
+        "2-stage": "2",
+        "3-stage": "3",
+    },
+)
+
+_COUNT_COLUMNS = (
+    "Max Players",
+    "Max Stage 1",
+    "Max Stage 2",
+    "Max Stage 3",
+    "Priority",
+    "Priority Stage 1",
+    "Priority Stage 2",
+    "Priority Stage 3",
+)
+_POWER_COLUMNS = ("Min Power A", "Min Power B")
+
+
+def _format_for(header: list[str]) -> sheet_format.TabSpec:
+    """The house-style pass for a strategies tab: player counts and power
+    floors `#,##0` (priorities are ranks, so they keep Sheets' plain number
+    look), Preset Name frozen, a dropdown of the Stage Count words."""
+    at = {name: idx for idx, name in enumerate(header)}
+    return sheet_format.TabSpec(
+        quantity=tuple(
+            at[name]
+            for name in ("Max Players", "Max Stage 1", "Max Stage 2", "Max Stage 3")
+            + _POWER_COLUMNS
+        ),
+        frozen_columns=1,
+        dropdowns=((at["Stage Count"], STAGE_COUNT_WORDS.options),),
+    )
+
+
+DS_FORMAT = _format_for(_DS_HEADER)
+CS_FORMAT = _format_for(_CS_HEADER)
+
+
+def _header_for(event_type: str) -> list[str]:
+    return _DS_HEADER if event_type == "DS" else _CS_HEADER
+
+
+def _format_for_event(event_type: str) -> sheet_format.TabSpec:
+    return DS_FORMAT if event_type == "DS" else CS_FORMAT
+
+
+def _read_tab(ws, event_type: str) -> list[list[str]]:
+    """The tab's rows, unformatted, every cell as text: a number reads as its
+    digits whatever format the alliance's sheet shows it in."""
+    rows = sheet_format.read_values(ws, _format_for_event(event_type))
+    return [["" if c is None else str(c) for c in row] for row in rows]
+
+
+def _records(values: list[list[str]]) -> list[dict]:
+    """`get_all_records` for rows already read: one dict per row, keyed by
+    header text. A repeated header keeps its first column."""
+    if not values:
+        return []
+    header = [str(c).strip() for c in values[0]]
+    out: list[dict] = []
+    for row in values[1:]:
+        record: dict = {}
+        for idx, name in enumerate(header):
+            if name and name not in record:
+                record[name] = row[idx] if idx < len(row) else ""
+        out.append(record)
+    return out
+
+
+def _number_cell(value, parse):
+    """A cell as the number it holds; blank stays blank, and text no parse
+    can read stays as typed rather than becoming a 0 nobody wrote."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    text = str(value if value is not None else "").strip()
+    if not text:
+        return ""
+    number = parse(text)
+    return text if number is None else number
+
+
+def _parse_count(text: str) -> int | None:
+    try:
+        return int(float(text.replace(",", "")))
+    except (ValueError, OverflowError):
+        return None
+
+
+def _sheet_row(header: list[str], cells: list) -> list:
+    """One row as written: counts, priorities and power floors as numbers,
+    Stage Count as its word, everything else as it is."""
+    out: list = []
+    for name, value in zip(header, cells):
+        if name in _POWER_COLUMNS:
+            out.append(_number_cell(value, parse_power))
+        elif name in _COUNT_COLUMNS:
+            out.append(_number_cell(value, _parse_count))
+        elif name == "Stage Count":
+            out.append(STAGE_COUNT_WORDS.reword(str(value)))
+        else:
+            out.append(value)
+    return out
+
+
 # Truthy strings the legacy `Use Phases` column might carry. Used only
 # to read pre-3-phase preset data — new writes always use the
 # `Phase Count` int column.
@@ -536,7 +663,7 @@ def _parse_phase_count(row: dict) -> int:
     raw = row.get("Stage Count", "")
     if raw not in ("", None):
         try:
-            val = int(str(raw).strip())
+            val = int(STAGE_COUNT_WORDS.code(str(raw)))
         except (TypeError, ValueError):
             val = 0
         if val in (2, 3):
@@ -594,7 +721,7 @@ def _get_or_create_strategies_worksheet(guild_id: int, event_type: str):
     tab_name = _strategies_tab_name(guild_id, event_type)
     if not tab_name:
         return None
-    header = _DS_HEADER if event_type == "DS" else _CS_HEADER
+    header = _header_for(event_type)
     import config
 
     return config.get_or_create_worksheet(
@@ -613,7 +740,7 @@ def load_preset(guild_id: int, event_type: str, name: str) -> PresetBuffer | Non
     if ws is None:
         return None
     try:
-        records = ws.get_all_records()
+        records = _records(_read_tab(ws, event_type))
     except Exception as e:
         logger.warning(
             "[STORM STRATEGY] load_preset failed for guild=%s event=%s name=%s: %s",
@@ -726,7 +853,7 @@ def list_presets(guild_id: int, event_type: str) -> list[str]:
     if ws is None:
         return []
     try:
-        records = ws.get_all_records()
+        records = _records(_read_tab(ws, event_type))
     except Exception as e:
         logger.warning(
             "[STORM STRATEGY] list_presets failed for guild=%s event=%s: %s",
@@ -838,6 +965,59 @@ def zone_rules_for(guild_id: int, event_type: str, strategy_id: str | None = Non
         return []
 
 
+def _translate_row(row: list, old_header_idx: dict[str, int], header: list[str]) -> list[str]:
+    """Re-emit one preset row in the new column order. Cells
+    missing from the old header default to an empty string so
+    `_safe_int` / `_parse_phase_count` fall through to their
+    defaults (0 / 0). Legacy `Use Phases` (truthy → phase_count
+    = 2) is honoured here too so an interim 2-phase preset
+    round-trips into the new `Stage Count` column on the next
+    save. Legacy CS `Min Power` (single column) maps onto the
+    new `Min Power A` slot — `Min Power B` defaults to empty
+    until leadership sets a Team B floor."""
+    out: list[str] = []
+    legacy_uses_phases = (
+        _parse_uses_phases(row[old_header_idx["Use Phases"]])
+        if "Use Phases" in old_header_idx and old_header_idx["Use Phases"] < len(row)
+        else False
+    )
+    for col_name in header:
+        if col_name == "Stage Count" and "Stage Count" not in old_header_idx:
+            out.append("2" if legacy_uses_phases else "0")
+            continue
+        if (
+            col_name == "Min Power A"
+            and "Min Power A" not in old_header_idx
+            and "Min Power" in old_header_idx
+        ):
+            legacy_idx = old_header_idx["Min Power"]
+            if 0 <= legacy_idx < len(row):
+                out.append(str(row[legacy_idx]))
+            else:
+                out.append("")
+            continue
+        idx = old_header_idx.get(col_name, -1)
+        if 0 <= idx < len(row):
+            out.append(str(row[idx]))
+        else:
+            out.append("")
+    return out
+
+
+def _write_tab(ws, event_type: str, rows: list[list]) -> None:
+    """Rewrite the whole tab, header first, then bring it up to the house
+    style (#729), once.
+
+    RAW, with the numbers as Python ints: Sheets stores those as real
+    numbers, while the text columns (a preset name an officer typed, a
+    zone, a faction) are stored exactly as given. USER_ENTERED would turn
+    a preset named "1/2" into a date, and the preset would no longer be
+    found by its name."""
+    ws.clear()
+    ws.update("A1", rows, value_input_option="RAW")
+    sheet_format.ensure_formatted(ws, _format_for_event(event_type))
+
+
 def save_preset(guild_id: int, event_type: str, buf: PresetBuffer) -> bool:
     """Persist a preset to the Sheet. Replaces all rows for this preset
     name with the buffer's current zones. Returns True on success."""
@@ -849,7 +1029,7 @@ def save_preset(guild_id: int, event_type: str, buf: PresetBuffer) -> bool:
     # append the buffer's rows. The replace strategy avoids tracking
     # row indexes per zone.
     try:
-        all_values = ws.get_all_values()
+        all_values = _read_tab(ws, event_type)
     except Exception as e:
         logger.warning(
             "[STORM STRATEGY] save_preset read-back failed for guild=%s event=%s: %s",
@@ -859,7 +1039,7 @@ def save_preset(guild_id: int, event_type: str, buf: PresetBuffer) -> bool:
         )
         return False
 
-    header = _DS_HEADER if event_type == "DS" else _CS_HEADER
+    header = _header_for(event_type)
     # Map sibling preset rows from their OLD header shape into the new
     # column order. Without this remap, a tab that already had presets
     # written under the pre-#152 header (6 columns for DS, or the
@@ -872,95 +1052,37 @@ def save_preset(guild_id: int, event_type: str, buf: PresetBuffer) -> bool:
     old_header = [str(c).strip() for c in (all_values[0] if all_values else [])]
     old_header_idx = {name: idx for idx, name in enumerate(old_header)}
 
-    def _translate(row: list) -> list[str]:
-        """Re-emit one preset row in the new column order. Cells
-        missing from the old header default to an empty string so
-        `_safe_int` / `_parse_phase_count` fall through to their
-        defaults (0 / 0). Legacy `Use Phases` (truthy → phase_count
-        = 2) is honoured here too so an interim 2-phase preset
-        round-trips into the new `Stage Count` column on the next
-        save. Legacy CS `Min Power` (single column) maps onto the
-        new `Min Power A` slot — `Min Power B` defaults to empty
-        until leadership sets a Team B floor."""
-        out: list[str] = []
-        legacy_uses_phases = (
-            _parse_uses_phases(row[old_header_idx["Use Phases"]])
-            if "Use Phases" in old_header_idx and old_header_idx["Use Phases"] < len(row)
-            else False
-        )
-        for col_name in header:
-            if col_name == "Stage Count" and "Stage Count" not in old_header_idx:
-                out.append("2" if legacy_uses_phases else "0")
-                continue
-            if (
-                col_name == "Min Power A"
-                and "Min Power A" not in old_header_idx
-                and "Min Power" in old_header_idx
-            ):
-                legacy_idx = old_header_idx["Min Power"]
-                if 0 <= legacy_idx < len(row):
-                    out.append(str(row[legacy_idx]))
-                else:
-                    out.append("")
-                continue
-            idx = old_header_idx.get(col_name, -1)
-            if 0 <= idx < len(row):
-                out.append(str(row[idx]))
-            else:
-                out.append("")
-        return out
-
     # Filter: keep header + non-matching rows, translated to new shape.
-    kept = [header]
+    kept: list[list] = [header]
     for row in all_values[1:]:  # skip existing header row
         if not row:
             continue
         if str(row[0]).strip().lower() != buf.name.lower():
-            kept.append(_translate(row))
+            kept.append(_sheet_row(header, _translate_row(row, old_header_idx, header)))
     # Append buffer rows.
     phase_count_cell = str(buf.phase_count)
     for z in buf.zones:
-        if event_type == "DS":
-            kept.append(
-                [
-                    buf.name,
-                    z.zone,
-                    str(z.max_players),
-                    str(z.max_phase1),
-                    str(z.max_phase2),
-                    str(z.max_phase3),
-                    str(z.min_power_a),
-                    str(z.min_power_b),
-                    str(z.priority),
-                    str(z.priority_phase1),
-                    str(z.priority_phase2),
-                    str(z.priority_phase3),
-                    phase_count_cell,
-                ]
-            )
-        else:
-            kept.append(
-                [
-                    buf.name,
-                    z.zone,
-                    str(z.max_players),
-                    str(z.max_phase1),
-                    str(z.max_phase2),
-                    str(z.max_phase3),
-                    str(z.min_power_a),
-                    str(z.min_power_b),
-                    str(z.priority),
-                    str(z.priority_phase1),
-                    str(z.priority_phase2),
-                    str(z.priority_phase3),
-                    buf.faction,
-                    phase_count_cell,
-                ]
-            )
+        cells = [
+            buf.name,
+            z.zone,
+            z.max_players,
+            z.max_phase1,
+            z.max_phase2,
+            z.max_phase3,
+            z.min_power_a,
+            z.min_power_b,
+            z.priority,
+            z.priority_phase1,
+            z.priority_phase2,
+            z.priority_phase3,
+        ]
+        if event_type != "DS":
+            cells.append(buf.faction)
+        cells.append(phase_count_cell)
+        kept.append(_sheet_row(header, cells))
 
     try:
-        ws.clear()
-        ws.update("A1", kept, value_input_option="RAW")
+        _write_tab(ws, event_type, kept)
     except Exception as e:
         logger.warning(
             "[STORM STRATEGY] save_preset write failed for guild=%s event=%s name=%s: %s",
@@ -976,12 +1098,16 @@ def save_preset(guild_id: int, event_type: str, buf: PresetBuffer) -> bool:
 
 def delete_preset(guild_id: int, event_type: str, name: str) -> bool:
     """Remove all rows for a named preset. Returns True if any rows
-    were removed; False if the preset wasn't found."""
+    were removed; False if the preset wasn't found.
+
+    The rows kept are re-emitted under the current header the same way
+    `save_preset` does, so a tab still in an older column shape doesn't
+    end up with its rows under the wrong headers."""
     ws = _get_or_create_strategies_worksheet(guild_id, event_type)
     if ws is None:
         return False
     try:
-        all_values = ws.get_all_values()
+        all_values = _read_tab(ws, event_type)
     except Exception as e:
         logger.warning(
             "[STORM STRATEGY] delete_preset read failed for guild=%s event=%s: %s",
@@ -991,8 +1117,10 @@ def delete_preset(guild_id: int, event_type: str, name: str) -> bool:
         )
         return False
 
-    header = _DS_HEADER if event_type == "DS" else _CS_HEADER
-    kept = [header]
+    header = _header_for(event_type)
+    old_header = [str(c).strip() for c in (all_values[0] if all_values else [])]
+    old_header_idx = {col: idx for idx, col in enumerate(old_header)}
+    kept: list[list] = [header]
     removed = False
     for row in all_values[1:]:
         if not row:
@@ -1000,12 +1128,11 @@ def delete_preset(guild_id: int, event_type: str, name: str) -> bool:
         if str(row[0]).strip().lower() == name.lower():
             removed = True
             continue
-        kept.append(row)
+        kept.append(_sheet_row(header, _translate_row(row, old_header_idx, header)))
     if not removed:
         return False
     try:
-        ws.clear()
-        ws.update("A1", kept, value_input_option="RAW")
+        _write_tab(ws, event_type, kept)
     except Exception as e:
         logger.warning(
             "[STORM STRATEGY] delete_preset write failed for guild=%s event=%s name=%s: %s",

@@ -1068,3 +1068,175 @@ class TestPhaseAwarePresets:
     def test_parse_uses_phases_falsy_strings(self):
         for raw in ("", "FALSE", "false", "no", "n", "0", "off", None, "  "):
             assert ss._parse_uses_phases(raw) is False
+
+
+# ── #729: words and real numbers on the strategies tab ──────────────────────
+
+
+class _FormattedWorksheet(_FakeWorksheet):
+    """A worksheet that behaves like Sheets once the tab holds real numbers
+    in `#,##0`: read formatted, a number shows as "300,000,000"; read
+    unformatted, it is the number."""
+
+    def get_all_values(self, value_render_option=None, date_time_render_option=None):
+        if value_render_option == "UNFORMATTED_VALUE":
+            return [list(r) for r in self._rows]
+        return [
+            [f"{c:,}" if isinstance(c, int) and not isinstance(c, bool) else c for c in r]
+            for r in self._rows
+        ]
+
+
+class TestStrategyWords:
+    def _buf(self, name="Standard", phase_count=0, event_type="DS"):
+        return ss.PresetBuffer(
+            name=name,
+            event_type=event_type,
+            phase_count=phase_count,
+            faction="Rulebringers",
+            zones=[
+                ss.ZoneRow(
+                    zone="Nuclear Silo",
+                    max_players=4,
+                    max_phase1=4 if phase_count else 0,
+                    max_phase2=2 if phase_count else 0,
+                    min_power_a=300_000_000,
+                    min_power_b=180_000_000,
+                    priority=1,
+                ),
+            ],
+        )
+
+    def test_stage_count_is_written_in_words(self, fake_sheet_factory):
+        fake, gid = fake_sheet_factory
+        ss.save_preset(gid, "DS", self._buf("Flat", 0))
+        ss.save_preset(gid, "DS", self._buf("Two", 2))
+        ss.save_preset(gid, "DS", self._buf("Three", 3))
+        ws = fake._tabs["DS Strategies"]
+        assert ws._rows[0] == ss._DS_HEADER
+        assert [r[12] for r in ws._rows[1:]] == [
+            "Flat",
+            "2 Stages (S1 + S2)",
+            "3 Stages (S1 + S2 + S3)",
+        ]
+        assert [ss.load_preset(gid, "DS", n).phase_count for n in ("Flat", "Two", "Three")] == [
+            0,
+            2,
+            3,
+        ]
+
+    def test_quantities_are_written_as_numbers(self, fake_sheet_factory):
+        fake, gid = fake_sheet_factory
+        ss.save_preset(gid, "CS", self._buf(event_type="CS"))
+        row = fake._tabs["CS Strategies"]._rows[1]
+        assert row[:2] == ["Standard", "Nuclear Silo"]
+        assert row[2:12] == [4, 0, 0, 0, 300_000_000, 180_000_000, 1, 0, 0, 0]
+        assert all(type(c) is int for c in row[2:12])
+        assert row[12:] == ["Rulebringers", "Flat"]
+
+    def test_old_digits_and_any_spelling_still_read(self, fake_sheet_factory):
+        fake, gid = fake_sheet_factory
+        ws = fake.add_worksheet("DS Strategies")
+        blank = ["0"] * 10
+        ws._rows = [list(ss._DS_HEADER)] + [
+            [name, "Nuclear Silo"] + blank + [stage]
+            for name, stage in (
+                ("Digit2", "2"),
+                ("Digit3", "3"),
+                ("Digit0", "0"),
+                ("Upper", "3 STAGES (S1 + S2 + S3)"),
+                ("Picker", "2 Stages"),
+                ("PickerFlat", "Flat (no stages)"),
+                ("Odd", "something"),
+            )
+        ]
+        got = {n: ss.load_preset(gid, "DS", n).phase_count for n, *_ in ws._rows[1:]}
+        assert got == {
+            "Digit2": 2,
+            "Digit3": 3,
+            "Digit0": 0,
+            "Upper": 3,
+            "Picker": 2,
+            "PickerFlat": 0,
+            "Odd": 0,
+        }
+
+    def test_a_save_rewrites_older_rows_in_words_and_numbers(self, fake_sheet_factory):
+        fake, gid = fake_sheet_factory
+        ws = fake.add_worksheet("DS Strategies")
+        ws._rows = [
+            list(ss._DS_HEADER),
+            ["Old", "Arsenal", "4", "0", "0", "0", "250M", "1,000", "2", "0", "0", "0", "2"],
+            ["Typo", "Arsenal", "4", "", "", "", "tbd", "", "", "", "", "", ""],
+        ]
+        ss.save_preset(gid, "DS", self._buf())
+        old, typo = ws._rows[1], ws._rows[2]
+        assert old == ["Old", "Arsenal", 4, 0, 0, 0, 250_000_000, 1000, 2, 0, 0, 0] + [
+            "2 Stages (S1 + S2)"
+        ]
+        # Blank stays blank; text no reader can parse stays as typed.
+        assert typo[6] == "tbd" and typo[3] == "" and typo[12] == ""
+
+    def test_readers_read_numbers_unformatted(self, fake_sheet_factory):
+        """Once the tab holds real numbers in `#,##0`, the formatted text is
+        "300,000,000"; the readers must see 300000000, not a 300 or a 0."""
+        fake, gid = fake_sheet_factory
+        ws = _FormattedWorksheet("DS Strategies")
+        fake._tabs["DS Strategies"] = ws
+        ss.save_preset(gid, "DS", self._buf("Standard", 2))
+        assert ws.get_all_values()[1][6] == "300,000,000"
+        loaded = ss.load_preset(gid, "DS", "Standard")
+        z = loaded.zones[0]
+        assert (z.min_power_a, z.min_power_b, z.max_players) == (300_000_000, 180_000_000, 4)
+        assert loaded.phase_count == 2
+        assert ss.list_strategies(gid, "DS") == [{"id": "Standard", "name": "Standard"}]
+        assert ss.zone_rules_for(gid, "DS", "Standard")[0]["min_a"] == 300_000_000
+        # And a second save keeps the sibling's numbers as numbers.
+        ss.save_preset(gid, "DS", self._buf("Other"))
+        assert ws._rows[1][6] == 300_000_000
+
+    def test_safe_int_reads_a_thousands_separator(self):
+        assert ss._safe_int("1,000") == 1000
+        assert ss._safe_int("12") == 12
+
+    def test_delete_rewrites_old_shape_rows_under_the_new_header(self, fake_sheet_factory):
+        fake, gid = fake_sheet_factory
+        ws = fake.add_worksheet("DS Strategies")
+        ws._rows = [
+            ["Preset Name", "Zone", "Max Players", "Min Power A", "Min Power B", "Priority"],
+            ["Keep", "Arsenal", "4", "250000000", "150000000", "1"],
+            ["Drop", "Arsenal", "4", "250000000", "150000000", "1"],
+        ]
+        assert ss.delete_preset(gid, "DS", "Drop") is True
+        assert ws._rows[0] == ss._DS_HEADER
+        kept = ss.load_preset(gid, "DS", "Keep")
+        z = kept.zones[0]
+        assert (z.max_players, z.min_power_a, z.min_power_b, z.priority) == (
+            4,
+            250_000_000,
+            150_000_000,
+            1,
+        )
+        assert ws._rows[1][12] == "Flat"
+
+    def test_a_save_formats_the_tab(self, fake_sheet_factory):
+        fake, gid = fake_sheet_factory
+        with patch("sheet_format.ensure_formatted") as fmt:
+            ss.save_preset(gid, "CS", self._buf(event_type="CS"))
+        fmt.assert_called_once()
+        assert fmt.call_args.args[1] is ss.CS_FORMAT
+
+    def test_format_specs(self):
+        for spec, header in ((ss.DS_FORMAT, ss._DS_HEADER), (ss.CS_FORMAT, ss._CS_HEADER)):
+            assert [header[i] for i in spec.quantity] == [
+                "Max Players",
+                "Max Stage 1",
+                "Max Stage 2",
+                "Max Stage 3",
+                "Min Power A",
+                "Min Power B",
+            ]
+            assert spec.frozen_columns == 1
+            ((col, options),) = spec.dropdowns
+            assert header[col] == "Stage Count"
+            assert options == ("Flat", "2 Stages (S1 + S2)", "3 Stages (S1 + S2 + S3)")

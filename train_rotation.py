@@ -39,6 +39,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 
 import config_health
+import sheet_format
 import sheet_identity
 
 # ── Day-of-week ──────────────────────────────────────────────────────────────
@@ -202,6 +203,12 @@ BIRTHDAY_MODES = [BIRTHDAY_OVERRIDE, BIRTHDAY_DISABLED]
 # headed "Discord ID" in the seventh column, and keep it.
 HISTORY_HEADER = ["Date", "Member", "Reason", "Status", "Posted At", "Notes"]
 MEMBER_RULES_HEADER = ["Member", "Rule Type", "Value", "Notes"]
+
+# How the house-style pass (#729) formats Train History: Date in Sheets'
+# Date format, Posted At as Date time, Date and Member frozen. Not applied by
+# the writers yet: the pass runs once per tab, so it waits until the readers
+# take real dates and the cells hold words.
+HISTORY_FORMAT = sheet_format.TabSpec(date=(0,), datetime=(4,), frozen_columns=2)
 DAY_RULES_HEADER = [
     "Preset Name",
     "Day of Week",

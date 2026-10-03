@@ -13,8 +13,7 @@ keep working regardless of which file actually defines the symbol.
 """
 
 import asyncio
-from datetime import date, datetime
-from zoneinfo import ZoneInfo
+from datetime import date
 
 import discord
 
@@ -22,6 +21,7 @@ import wizard_registry
 from wizard_registry import ExpiringView
 import train_rotation as tr
 import train_rotation_ui as ui
+from time_helpers import server_stamp
 
 
 class _ConfirmPostModal(discord.ui.Modal, title="Post Train Conductor"):
@@ -202,7 +202,9 @@ class DailyConfirmView(ExpiringView):
                 )
                 return
 
-        now_iso = datetime.now(tz=ZoneInfo("UTC")).isoformat(timespec="minutes")
+        # A game moment, so server time, in the shape Sheets reads as a
+        # date-time (#729); the header names the clock, the cell carries none.
+        now_iso = server_stamp()
         tab = get_train_config(self.guild_id).get("history_tab") or ""
         await asyncio.to_thread(
             tr.set_day_status,

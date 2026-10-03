@@ -59,12 +59,13 @@ def test_preview_train_history(seeded_db, test_spreadsheet, monkeypatch):
         patch("sheet_identity.load_roster", return_value=roster),
         patch("sheet_identity.settings_for", return_value=sheet_identity.Settings()),
     ):
-        # Written out of date order on purpose: the tab sorts itself.
+        # Written out of date order on purpose: the tab sorts itself. Alpha's
+        # stamp is the old UTC text; the others are what the bot writes now.
         for day, member, reason, posted_at, notes in (
             ("2026-09-28", "Alpha", "auto", "2026-09-28T22:00:05+00:00", ""),
-            ("2026-09-29", "Bravo", "vs", "2026-09-29T22:00:12+00:00", ""),
-            ("2026-10-01", "Delta", "leadership", "2026-10-01T22:00:03+00:00", ""),
-            ("2026-09-30", "Charlie", "birthday", "2026-09-30T22:01:40+00:00", "birthday 🎂"),
+            ("2026-09-29", "Bravo", "vs", "2026-09-29 20:00:12", ""),
+            ("2026-10-01", "Delta", "leadership", "2026-10-01 20:00:03", ""),
+            ("2026-09-30", "Charlie", "birthday", "2026-09-30 20:01:40", "birthday 🎂"),
         ):
             assert tr.set_day_status(
                 TEST_GUILD_ID,
@@ -92,6 +93,16 @@ def test_preview_train_history(seeded_db, test_spreadsheet, monkeypatch):
     rows = ws.get_all_values()
     assert [r[1] for r in rows[1:]] == ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "", "Foxtrot"]
     assert rows[0][6] == "Discord ID" and rows[1][6] == "100000000000000001"
+    # The Date column now shows the locale's format, not the ISO text...
+    assert rows[1][0] != "2026-09-28"
+
+    # ...and the bot still reads its own dates back exactly.
+    with patch("config.get_spreadsheet", return_value=sh):
+        history = {h.member: h for h in tr.load_history(TEST_GUILD_ID, title)}
+    assert history["Alpha"].date == "2026-09-28"
+    assert history["Alpha"].posted_at == "2026-09-28 20:00:05"  # old UTC text, in server time
+    assert history["Bravo"].posted_at == "2026-09-29 20:00:12"  # a real date-time cell
+    assert history["Echo"].date == "2026-10-02" and history["Echo"].posted_at == ""
 
     meta = _meta(sh, title)
     grid = meta["properties"]["gridProperties"]

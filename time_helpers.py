@@ -88,6 +88,20 @@ def server_today() -> date:
     return server_date_for(datetime.now(timezone.utc))
 
 
+SHEET_STAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
+def server_stamp(dt: datetime | None = None) -> str:
+    """A game moment as a Sheet cell: server time, no zone, `2026-09-28 20:00:05`.
+
+    Sheets reads that shape as a real date-time, so it sorts and filters and
+    takes the tab's Date time format in each alliance's own locale. The
+    header names the clock ("server time"), so the cell carries no "UTC"
+    (#729). `dt` must be timezone-aware; defaults to now."""
+    dt = dt or datetime.now(timezone.utc)
+    return dt.astimezone(SERVER_TZ).strftime(SHEET_STAMP_FORMAT)
+
+
 def local_today(tz: ZoneInfo | timezone | None = None) -> date:
     """Today's calendar date in `tz` (default: ET) — **the exception.**
 

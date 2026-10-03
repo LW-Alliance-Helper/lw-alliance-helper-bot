@@ -205,9 +205,11 @@ HISTORY_HEADER = ["Date", "Member", "Reason", "Status", "Posted At", "Notes"]
 MEMBER_RULES_HEADER = ["Member", "Rule Type", "Value", "Notes"]
 
 # How the house-style pass (#729) formats Train History: Date in Sheets'
-# Date format, Posted At as Date time, Date and Member frozen. Not applied by
-# the writers yet: the pass runs once per tab, so it waits until the readers
-# take real dates and the cells hold words.
+# Date format, Posted At as Date time, Date and Member frozen. Every History
+# read goes through `sheet_format.read_values` with it, so the dates come back
+# as ISO text whatever the locale shows. The pass itself isn't applied by
+# the writers yet: it runs once per tab, so it waits until the cells hold
+# words.
 HISTORY_FORMAT = sheet_format.TabSpec(date=(0,), datetime=(4,), frozen_columns=2)
 DAY_RULES_HEADER = [
     "Preset Name",
@@ -272,7 +274,7 @@ class HistoryRow:
     member: str
     reason: str
     status: str
-    posted_at: str = ""
+    posted_at: str = ""  # server time, `YYYY-MM-DD HH:MM:SS` (time_helpers.server_stamp)
     notes: str = ""
     discord_id: str = ""  # identity key; blank → match by name (older / hand-typed rows)
 
@@ -1054,7 +1056,7 @@ def load_history(guild_id: int, tab_name: str) -> list[HistoryRow]:
     if ws is None:
         return []
     try:
-        values = ws.get_all_values()
+        values = sheet_format.read_values(ws, HISTORY_FORMAT)
     except Exception as e:
         print(f"[TRAIN ROTATION] load_history read failed for guild {guild_id}: {e}")
         return []
@@ -1109,7 +1111,7 @@ def write_draft_rows(guild_id: int, tab_name: str, draft: list[DraftDay]) -> boo
     if ws is None:
         return False
     try:
-        values = ws.get_all_values()
+        values = sheet_format.read_values(ws, HISTORY_FORMAT)
     except Exception as e:
         print(f"[TRAIN ROTATION] write_draft read-back failed for guild {guild_id}: {e}")
         return False
@@ -1167,7 +1169,7 @@ def set_day_status(
     if ws is None:
         return False
     try:
-        values = ws.get_all_values()
+        values = sheet_format.read_values(ws, HISTORY_FORMAT)
     except Exception as e:
         print(f"[TRAIN ROTATION] set_day_status read-back failed for guild {guild_id}: {e}")
         return False

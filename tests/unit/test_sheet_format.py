@@ -135,3 +135,60 @@ def test_a_failed_format_does_not_raise():
     sh, ws = _sheet()
     sh.batch_update.side_effect = RuntimeError("quota")
     assert sf.ensure_formatted(ws, sf.TabSpec(), sh=sh) is False
+
+
+# ── Reading dates back (#729) ────────────────────────────────────────────────
+
+
+class _UnformattedWS:
+    """Answers the unformatted read the way the Sheets API does: a date as a
+    serial number, a number as a number, text as text."""
+
+    def __init__(self, rows):
+        self.rows = rows
+        self.kwargs = None
+
+    def get_all_values(self, **kwargs):
+        self.kwargs = kwargs
+        return [list(r) for r in self.rows]
+
+
+def test_read_values_turns_serial_dates_into_iso_text():
+    ws = _UnformattedWS(
+        [
+            ["Date", "Member", "Posted At", "Count"],
+            [46293, "Alpha", 46293.8334375, 5.0],
+            ["2026-09-29", "Bravo", "2026-09-29T22:00:12+00:00", 12],
+            ["", "Charlie", "", ""],
+            ["typed by hand", "Delta", "soon", True],
+        ]
+    )
+    spec = sf.TabSpec(date=(0,), datetime=(2,))
+    rows = sf.read_values(ws, spec)
+    assert ws.kwargs == {
+        "value_render_option": "UNFORMATTED_VALUE",
+        "date_time_render_option": "SERIAL_NUMBER",
+    }
+    assert rows[0] == ["Date", "Member", "Posted At", "Count"]
+    assert rows[1] == ["2026-09-28", "Alpha", "2026-09-28 20:00:09", "5"]
+    # An old UTC stamp reads in server time (UTC-2).
+    assert rows[2] == ["2026-09-29", "Bravo", "2026-09-29 20:00:12", "12"]
+    assert rows[3] == ["", "Charlie", "", ""]
+    assert rows[4] == ["typed by hand", "Delta", "soon", "TRUE"]
+
+
+def test_read_values_falls_back_for_a_plain_worksheet():
+    class Plain:
+        def get_all_values(self):
+            return [["Date"], ["2026-09-28"]]
+
+    assert sf.read_values(Plain(), sf.TabSpec(date=(0,))) == [["Date"], ["2026-09-28"]]
+
+
+def test_server_stamp_is_server_time_without_a_zone():
+    from datetime import datetime, timezone
+
+    from time_helpers import server_stamp
+
+    moment = datetime(2026, 9, 28, 22, 0, 5, tzinfo=timezone.utc)
+    assert server_stamp(moment) == "2026-09-28 20:00:05"

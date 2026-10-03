@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 
 MARK_KEY = "lwah.tab"
 STYLE_VERSION = 1
@@ -247,3 +248,84 @@ def _read_header_format(sh, ws) -> bool | None:
         print(f"[SHEET FORMAT] Could not read the header of '{title}': {e}")
         return None
     return header_is_styled(body)
+
+
+# ── Reading a formatted tab back ─────────────────────────────────────────────
+#
+# Once a column carries Sheets' Date or Date time format, the text Sheets
+# shows is the alliance's locale (9/28/2026 here, 28/09/2026 elsewhere),
+# which no reader can parse without guessing. So a tab with date columns is
+# read unformatted, where a date is a serial number, and each date cell is
+# turned back into the ISO text the bot writes. Old cells written as text
+# keep working: an ISO date stays as it is, and an old UTC stamp
+# (`2026-09-28T22:00:05+00:00`) becomes the server-time stamp the bot
+# writes now, which also corrects it on the tab's next rewrite.
+
+_SERIAL_EPOCH = datetime(1899, 12, 30)
+
+
+def read_values(ws, spec: TabSpec) -> list[list[str]]:
+    """`ws.get_all_values()`, with the spec's date and date-time columns as
+    `YYYY-MM-DD` and `YYYY-MM-DD HH:MM:SS` text whatever the locale shows.
+
+    Every other cell comes back as the text it holds; a number as its
+    digits. A worksheet that can't read unformatted (a test double) is
+    read as before."""
+    try:
+        rows = ws.get_all_values(
+            value_render_option="UNFORMATTED_VALUE",
+            date_time_render_option="SERIAL_NUMBER",
+        )
+    except TypeError:
+        return ws.get_all_values()
+    dates, stamps = set(spec.date), set(spec.datetime)
+    out: list[list[str]] = []
+    for r, row in enumerate(rows):
+        cells = []
+        for c, value in enumerate(row):
+            if r > 0 and c in dates:
+                cells.append(date_cell(value))
+            elif r > 0 and c in stamps:
+                cells.append(stamp_cell(value))
+            else:
+                cells.append(_text(value))
+        out.append(cells)
+    return out
+
+
+def date_cell(value) -> str:
+    """A date cell as `YYYY-MM-DD`; text that isn't a date stays as it is."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return (_SERIAL_EPOCH + timedelta(days=int(value))).date().isoformat()
+    text = _text(value)
+    try:
+        return date.fromisoformat(text[:10]).isoformat() if len(text) >= 10 else text
+    except ValueError:
+        return text
+
+
+def stamp_cell(value) -> str:
+    """A date-time cell as a server-time `YYYY-MM-DD HH:MM:SS`."""
+    from time_helpers import SHEET_STAMP_FORMAT, server_stamp
+
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        moment = _SERIAL_EPOCH + timedelta(days=float(value))
+        return moment.replace(microsecond=0).strftime(SHEET_STAMP_FORMAT)
+    text = _text(value)
+    try:
+        moment = datetime.fromisoformat(text)
+    except ValueError:
+        return text
+    if moment.tzinfo is not None:
+        return server_stamp(moment)  # an old UTC stamp, now in server time
+    return moment.strftime(SHEET_STAMP_FORMAT)
+
+
+def _text(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)

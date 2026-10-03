@@ -273,6 +273,33 @@ def _remap_rows_to_header(rows: list[list[str]], header: list[str]) -> list[list
     return out
 
 
+def _owned_cell_ranges(header: list[str], values: dict, row_number: int) -> list[dict]:
+    """The cells a resubmit may write in an existing row, as `batch_update` ranges.
+
+    Only the columns the survey owns: anything else in the row belongs to
+    leadership (a note, a manual rank, a formula reading another tab), and
+    writing the whole row would blank it on every resubmit (#724). Runs of
+    neighbouring owned columns go out as one range each.
+    """
+    from gspread.utils import rowcol_to_a1
+
+    ranges: list[dict] = []
+    run_start = None
+    run: list[str] = []
+    for col_index, column in enumerate([*header, None], start=1):
+        if column is not None and column in values:
+            if run_start is None:
+                run_start = col_index
+            run.append(str(values[column]))
+            continue
+        if run_start is not None:
+            first = rowcol_to_a1(row_number, run_start)
+            last = rowcol_to_a1(row_number, run_start + len(run) - 1)
+            ranges.append({"range": f"{first}:{last}", "values": [run]})
+            run_start, run = None, []
+    return ranges
+
+
 def seed_survey_headers(
     guild_id: int, *, tab_responses: str, tab_history: str, questions: list
 ) -> list[str]:
@@ -365,17 +392,17 @@ def update_squad_powers(
             rows = [header]
         print(f"[SURVEY] Rebuilt '{tab_name}' header for guild={guild_id} ({len(header)} columns)")
 
-    new_row = row_for_header(
-        header, _values_by_column(questions, data, username, discord_id, now_str)
-    )
+    values = _values_by_column(questions, data, username, discord_id, now_str)
 
     for i, row in enumerate(rows):
         if len(row) >= 2 and row[1].strip() == discord_id:
-            ws.update(f"A{i + 1}", [new_row], value_input_option="USER_ENTERED")
+            ws.batch_update(
+                _owned_cell_ranges(header, values, i + 1), value_input_option="USER_ENTERED"
+            )
             print(f"[SURVEY] Updated Squad Powers row {i + 1} for {username}")
             return
 
-    ws.append_row(new_row, value_input_option="USER_ENTERED")
+    ws.append_row(row_for_header(header, values), value_input_option="USER_ENTERED")
     print(f"[SURVEY] Appended new Squad Powers row for {username}")
 
 

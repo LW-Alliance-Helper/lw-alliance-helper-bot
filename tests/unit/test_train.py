@@ -11,7 +11,14 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from tests.conftest import TEST_GUILD_ID
-from time_helpers import server_today
+from time_helpers import guild_zone, local_today
+
+
+def _alliance_today():
+    """Birthday placement judges "today" on the alliance's clock (#728)."""
+    from config import get_config
+
+    return local_today(guild_zone(get_config(TEST_GUILD_ID)))
 
 
 class TestParseBirthday:
@@ -235,7 +242,7 @@ class TestCheckAndAddBirthdays:
         from train import check_and_add_birthdays
         from config import save_birthday_config
 
-        today = server_today()
+        today = _alliance_today()
         target = today + timedelta(days=7)
 
         save_birthday_config(
@@ -264,7 +271,7 @@ class TestCheckAndAddBirthdays:
         from train import check_and_add_birthdays
         from config import save_birthday_config
 
-        today = server_today()
+        today = _alliance_today()
         target = today + timedelta(days=7)
 
         save_birthday_config(TEST_GUILD_ID, "Members", 0, 1, 2, 1, 1, 0, 14)
@@ -308,7 +315,7 @@ class TestCheckAndAddBirthdays:
         from train import check_and_add_birthdays
         from config import save_birthday_config
 
-        today = server_today()
+        today = _alliance_today()
         target = today + timedelta(days=7)
 
         save_birthday_config(TEST_GUILD_ID, "Members", 0, 1, 2, 1, 1, 1, 14)
@@ -334,7 +341,7 @@ class TestCheckAndAddBirthdays:
 
         from config import save_birthday_config
 
-        today = server_today()
+        today = _alliance_today()
         target = today + timedelta(days=7)
 
         save_birthday_config(TEST_GUILD_ID, "Members", 0, 1, 2, 1, 1, 1, 14)
@@ -369,7 +376,7 @@ class TestCheckAndAddBirthdays:
         from train import check_and_add_birthdays, render_conflict_message
         from config import save_birthday_config
 
-        today = server_today()
+        today = _alliance_today()
         target = today + timedelta(days=7)
 
         save_birthday_config(TEST_GUILD_ID, "Members", 0, 1, 2, 1, 1, 1, 14)
@@ -403,7 +410,7 @@ class TestCheckAndAddBirthdays:
         from train import check_and_add_birthdays, render_conflict_message
         from config import save_birthday_config
 
-        today = server_today()
+        today = _alliance_today()
         target = today + timedelta(days=7)
 
         save_birthday_config(TEST_GUILD_ID, "Members", 0, 1, 2, 1, 1, 1, 14)
@@ -431,7 +438,7 @@ class TestCheckAndAddBirthdays:
         from train import check_and_add_birthdays
         from config import save_birthday_config
 
-        today = server_today()
+        today = _alliance_today()
         target = today + timedelta(days=7)
 
         save_birthday_config(TEST_GUILD_ID, "Members", 0, 1, 2, 1, 1, 1, 14)
@@ -457,7 +464,7 @@ class TestCheckAndAddBirthdays:
         from train import check_and_add_birthdays
         from config import save_birthday_config, mark_conflict_ignored
 
-        today = server_today()
+        today = _alliance_today()
         target = today + timedelta(days=7)
 
         save_birthday_config(TEST_GUILD_ID, "Members", 0, 1, 2, 1, 1, 1, 14)
@@ -498,7 +505,7 @@ class TestCheckAndAddBirthdays:
         from train import check_and_add_birthdays
         from config import save_birthday_config
 
-        today = server_today()
+        today = _alliance_today()
         target = today + timedelta(days=30)  # beyond 14 day lookahead
 
         save_birthday_config(TEST_GUILD_ID, "Members", 0, 1, 2, 1, 1, 0, 14)
@@ -514,7 +521,7 @@ class TestCheckAndAddBirthdays:
         from train import check_and_add_birthdays
         from config import save_birthday_config
 
-        today = server_today()
+        today = _alliance_today()
         target = today + timedelta(days=7)
 
         save_birthday_config(
@@ -562,3 +569,43 @@ class TestGetThemesAndTones:
         result = get_tones(TEST_GUILD_ID)
         assert isinstance(result, list)
         assert len(result) > 0
+
+
+class TestBirthdayPlacementToday:
+    """#728: with no `today` passed, placement asks for the date in the
+    alliance's own timezone, the clock the announcement uses."""
+
+    def test_default_today_is_the_alliances_date(self, seeded_db):
+        import config
+        from train import check_and_add_birthdays
+        from config import save_birthday_config
+
+        cfg = config.get_config(TEST_GUILD_ID)
+        cfg.timezone = "Asia/Tokyo"
+        config.save_config(cfg)
+        save_birthday_config(
+            TEST_GUILD_ID,
+            tab_name="Members",
+            name_col=0,
+            birthday_col=1,
+            data_start_row=2,
+            enabled=1,
+            train_integration=1,
+            flexible_placement=0,
+            lookahead_days=0,
+        )
+        asked = []
+
+        def _local_today(tz):
+            asked.append(tz.key)
+            return date(2026, 10, 12)
+
+        members = [{"name": "TestMember Alpha", "month": 10, "day": 12}]
+        with (
+            patch("train_birthdays.load_birthdays", return_value=members),
+            patch("train_birthdays.local_today", side_effect=_local_today),
+        ):
+            schedule, _ = check_and_add_birthdays({}, guild_id=TEST_GUILD_ID)
+
+        assert asked == ["Asia/Tokyo"]
+        assert schedule["2026-10-12"]["name"] == "TestMember Alpha"

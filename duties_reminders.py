@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo
 
 import discord
 
@@ -33,7 +33,7 @@ import duties_copy as c
 import duties_db
 import duties_health
 import duties_render as r
-from time_helpers import ET
+from time_helpers import guild_zone
 
 logger = logging.getLogger(__name__)
 
@@ -44,10 +44,7 @@ HEARTBEAT = "duty_reminder"
 
 
 def guild_tz(cfg) -> ZoneInfo:
-    try:
-        return ZoneInfo((getattr(cfg, "timezone", "") or "") or "America/New_York")
-    except (ZoneInfoNotFoundError, ValueError):
-        return ET
+    return guild_zone(cfg)
 
 
 def _display_name(guild: discord.Guild, user_id: int) -> str:

@@ -94,23 +94,6 @@ def _slot_labels(
     )
 
 
-def _today_in_guild_tz(guild_id: int | None) -> _dt.date:
-    """Today's date in the alliance's configured timezone, falling back
-    to UTC if the guild has no timezone (or hasn't completed setup)."""
-    from zoneinfo import ZoneInfo
-    from config import get_config
-
-    tz_name = ""
-    if guild_id:
-        cfg = get_config(guild_id)
-        tz_name = (cfg.timezone if cfg else "") or ""
-    try:
-        tz = ZoneInfo(tz_name) if tz_name else _dt.timezone.utc
-    except Exception:
-        tz = _dt.timezone.utc
-    return _dt.datetime.now(tz).date()
-
-
 def _build_registration_embed(
     event_type: str, event_date_iso: str, time_a: str, time_b: str, teams: str = "both"
 ) -> discord.Embed:
@@ -329,11 +312,13 @@ async def handle_post_signup(
         return
 
     et = event_type
-    # Compare against today in the alliance's configured timezone, not
-    # the host's local clock — Railway runs UTC, so an east-of-UTC
-    # alliance posting near midnight their time would otherwise see
-    # their own event date flagged "in the past".
-    today_local = _today_in_guild_tz(interaction.guild_id)
+    # A storm is a game day, so "today" is the server day: the roster
+    # builder, attendance and the log picker all read it that way, and a
+    # sign-up dated off the alliance's own clock could land on a different
+    # day from the roster for the same storm near the reset (#726).
+    from time_helpers import server_today
+
+    today = server_today()
 
     raw_input = (event_date or "").strip()
     if not raw_input:
@@ -342,10 +327,10 @@ async def handle_post_signup(
         date_clean = next_event_date(
             interaction.guild_id,
             et,
-            today=today_local,
+            today=today,
         )
     else:
-        parsed = parse_event_date(raw_input, today=today_local)
+        parsed = parse_event_date(raw_input, today=today)
         if parsed is None:
             await interaction.response.send_message(
                 DATE_PARSE_REJECT.format(
@@ -358,7 +343,7 @@ async def handle_post_signup(
         date_clean = parsed.isoformat()
 
     parsed_date = _dt.date.fromisoformat(date_clean)
-    if parsed_date < today_local:
+    if parsed_date < today:
         pretty = format_event_date(date_clean)
         await interaction.response.send_message(
             f"⚠️ Event date {pretty} is in the past. Sign-ups should be posted for upcoming events.",

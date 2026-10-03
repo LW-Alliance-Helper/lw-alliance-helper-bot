@@ -253,6 +253,15 @@ class TestDateStep:
         assert r.row[1] == date(2026, 4, 14)
 
     @pytest.mark.asyncio
+    async def test_typed_date_without_a_year_is_the_storm_just_gone(self, seeded_db):
+        """#725: 12/31 typed on January 2 is the storm two days ago, read the
+        way attendance reads it, not a date eleven months away."""
+        _configure([TEXT_Q])
+        with patch("storm_date_helpers.server_today", return_value=date(2027, 1, 2)):
+            r = await Run(views=[{"wants_manual": True}], replies=["12/31", "Win"]).go()
+        assert r.row[1] == date(2026, 12, 31)
+
+    @pytest.mark.asyncio
     async def test_typed_garbage_ends_the_log(self, seeded_db):
         _configure([TEXT_Q])
         r = await Run(views=[{"wants_manual": True}], replies=["garbage"]).go()

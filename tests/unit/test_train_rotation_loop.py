@@ -174,6 +174,26 @@ async def test_weekly_draft_dedup_prevents_double_post():
     cog.mark_draft.assert_not_called()
 
 
+async def test_weekly_draft_picks_the_game_week():
+    """#726: the draft fires on the alliance's clock but covers a game week.
+    11pm ET Monday 2026-06-01 is already Tuesday in the game, so the draft is
+    for the week starting 2026-06-08, not the one half over."""
+    import train_rotation_ui as ui
+
+    cog = _make_cog()
+    captured = {}
+
+    def _capture(draft, week_start, preset_name):
+        captured["week_start"] = week_start
+        return MagicMock()
+
+    mon_11pm = datetime(2026, 6, 1, 23, 0, tzinfo=ET)
+    with patch.object(ui, "build_weekly_draft_embed", side_effect=_capture):
+        await _run(cog, now=mon_11pm, tcfg=_tcfg(weekly_draft_day=0, reminder_time="23:00"))
+
+    assert captured["week_start"].isoformat() == "2026-06-08"
+
+
 async def test_rotation_disabled_does_nothing():
     cog = _make_cog()
     chan = await _run(cog, now=SUNDAY_6PM, tcfg=_tcfg(rotation_enabled=0))

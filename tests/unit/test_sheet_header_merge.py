@@ -22,14 +22,31 @@ from tests.conftest import TEST_GUILD_ID
 
 
 class FakeWS:
-    """Worksheet that actually stores what's written to it."""
+    """Worksheet that actually stores what's written to it.
+
+    Reads render a formula the way Sheets does, as its result, so a writer
+    that reads the tab and writes it back loses the formula here too.
+    Column inserts and moves carry each cell with its column, as Sheets'
+    own operations do.
+    """
+
+    id = 0
 
     def __init__(self, rows=None):
         self.rows = [list(r) for r in (rows or [])]
         self.filtered = False
+        self.spreadsheet = _FakeSpreadsheet(self)
 
     def get_all_values(self):
-        return [list(r) for r in self.rows]
+        return [[("<result>" if str(c).startswith("=") else c) for c in r] for r in self.rows]
+
+    def insert_cols(self, values, col=1, value_input_option=None, inherit_from_before=False):
+        at = col - 1
+        for r, row in enumerate(self.rows):
+            while len(row) < at:
+                row.append("")
+            for k, column in enumerate(values):
+                row.insert(at + k, column[r] if r < len(column) else "")
 
     def row_values(self, n):
         return list(self.rows[n - 1]) if len(self.rows) >= n else []
@@ -59,6 +76,24 @@ class FakeWS:
 
     def set_basic_filter(self):
         self.filtered = True
+
+
+class _FakeSpreadsheet:
+    """The one structural request the survey writer sends: moveDimension."""
+
+    def __init__(self, ws):
+        self._ws = ws
+
+    def batch_update(self, body):
+        for request in body["requests"]:
+            move = request["moveDimension"]
+            src = move["source"]["startIndex"]
+            dest = move["destinationIndex"]
+            for row in self._ws.rows:
+                while len(row) < max(src + 1, dest):
+                    row.append("")
+                cell = row.pop(src)
+                row.insert(dest - 1 if dest > src else dest, cell)
 
 
 class FakeSheet:
@@ -302,6 +337,126 @@ class TestResubmitKeepsLeadershipColumns:
             {"range": "A5:B5", "values": [["Alice", "111"]]},
             {"range": "D5:E5", "values": [["UTC+2", "10/1/2026"]]},
         ]
+
+
+class TestAnswersTabHeaderChangesInPlace:
+    """#732: the answers tab is shared with leadership, so a header change
+    is made with Sheets' column operations, never by reading the tab and
+    writing it back. FakeWS renders formulas as their result on read, so a
+    read-and-rewrite would show up here as a lost formula."""
+
+    def _run(self, ws, questions, data, discord_id="111", username="TestMember Alpha"):
+        from survey import update_squad_powers
+
+        sheet = FakeSheet(ws)
+        survey = {"tab_squad_powers": "Answers", "questions": questions}
+        with patch("survey._get_spreadsheet", return_value=sheet):
+            update_squad_powers(discord_id, username, data, guild_id=TEST_GUILD_ID, survey=survey)
+        return sheet
+
+    def test_adding_a_question_keeps_leadership_formulas(self, seeded_db):
+        ws = FakeWS(
+            [
+                ["Username", "Discord ID", "Time Zone", "Rank", "Date Modified"],
+                ["TestMember Alpha", "111", "UTC+1", "=VLOOKUP(B2,Ranks!A:B,2,0)", "1/1/2026"],
+                ["TestMember Beta", "222", "UTC-5", "=VLOOKUP(B3,Ranks!A:B,2,0)", "1/2/2026"],
+            ]
+        )
+        sheet = self._run(
+            ws, [q("tz", "Time Zone"), q("role", "Preferred Role")], {"tz": "UTC+2", "role": "Eng"}
+        )
+
+        assert ws.rows[0] == [
+            "Username",
+            "Discord ID",
+            "Time Zone",
+            "Rank",
+            "Preferred Role",
+            "Date Modified",
+        ]
+        assert sheet.column_at("Rank") == [
+            "=VLOOKUP(B2,Ranks!A:B,2,0)",
+            "=VLOOKUP(B3,Ranks!A:B,2,0)",
+        ]
+        assert sheet.column_at("Preferred Role") == ["Eng", ""]
+        assert sheet.column_at("Date Modified")[1] == "1/2/2026"
+
+    def test_an_untitled_column_keeps_every_column_in_place(self, seeded_db):
+        ws = FakeWS(
+            [
+                ["Username", "Discord ID", "", "Notes", "Time Zone", "Date Modified"],
+                ["TestMember Alpha", "111", "spacer", "R4 candidate", "UTC+1", "1/1/2026"],
+            ]
+        )
+        self._run(ws, [q("tz", "Time Zone")], {"tz": "UTC+2"})
+
+        assert ws.rows[0] == ["Username", "Discord ID", "", "Notes", "Time Zone", "Date Modified"]
+        assert ws.rows[1][:5] == ["TestMember Alpha", "111", "spacer", "R4 candidate", "UTC+2"]
+
+    def test_a_new_member_lands_in_the_right_columns_past_an_untitled_one(self, seeded_db):
+        ws = FakeWS([["Username", "Discord ID", "", "Time Zone", "Date Modified"]])
+        sheet = self._run(ws, [q("tz", "Time Zone")], {"tz": "UTC+2"})
+
+        assert sheet.column_at("Time Zone") == ["UTC+2"]
+        assert ws.rows[1][2] == ""
+
+    def test_a_stranded_date_modified_moves_right_and_carries_its_cells(self, seeded_db):
+        ws = FakeWS(
+            [
+                ["Username", "Discord ID", "Time Zone", "Date Modified", "Notes"],
+                ["TestMember Beta", "222", "UTC-5", "1/2/2026", '=C2&" note"'],
+            ]
+        )
+        sheet = self._run(ws, [q("tz", "Time Zone")], {"tz": "UTC+2"})
+
+        assert ws.rows[0] == ["Username", "Discord ID", "Time Zone", "Notes", "Date Modified"]
+        assert sheet.column_at("Notes") == ['=C2&" note"', ""]
+        assert sheet.column_at("Date Modified")[0] == "1/2/2026"
+
+
+class TestUntitledColumnsInAppendOnlyTabs:
+    """#732: the history tab and the participation log read their header
+    with an untitled column left in its place, so appended rows line up."""
+
+    def test_survey_history_row_lines_up_past_an_untitled_column(self, seeded_db):
+        from survey import append_survey_history
+
+        ws = FakeWS([["Timestamp", "Discord ID", "Username", "", "Time Zone"]])
+        sheet = FakeSheet(ws)
+        survey = {"tab_history": "History", "questions": [q("tz", "Time Zone"), q("r", "Role")]}
+        with patch("survey._get_spreadsheet", return_value=sheet):
+            append_survey_history(
+                "111",
+                "TestMember Alpha",
+                {"tz": "UTC+2", "r": "Eng"},
+                guild_id=TEST_GUILD_ID,
+                survey=survey,
+            )
+
+        assert ws.rows[0] == ["Timestamp", "Discord ID", "Username", "", "Time Zone", "Role"]
+        assert ws.rows[1][3:] == ["", "UTC+2", "Eng"]
+
+    def test_participation_row_lines_up_past_an_untitled_column(self):
+        from storm_log import append_participation_row
+
+        ws = FakeWS([["Date", "Event", "", "Result"]])
+        pcfg = {"tab_name": "DS Participation Log", "questions": [q("res", "Result")]}
+        with (
+            patch("config.get_participation_config", return_value=pcfg),
+            patch("storm_log._get_spreadsheet", return_value=FakeSheet(ws)),
+        ):
+            append_participation_row(TEST_GUILD_ID, "DS", date(2026, 9, 25), {"res": "Win"})
+
+        assert ws.rows[0] == ["Date", "Event", "", "Result"]
+        assert ws.rows[1] == ["9/25/2026", "DS", "", "Win"]
+
+
+class TestSheetHeaderCells:
+    def test_middle_blanks_stay_and_trailing_padding_goes(self):
+        from config import sheet_header_cells
+
+        assert sheet_header_cells(["A", "", "B", "", ""]) == ["A", "", "B"]
+        assert sheet_header_cells(["", ""]) == []
 
 
 class TestLegacySquadPowerLabels:

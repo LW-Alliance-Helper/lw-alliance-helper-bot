@@ -261,3 +261,53 @@ class TestSurveySheetWrites:
         assert "Alice" in names
         assert "Bob" in names
         assert "Carol" in names
+
+
+class TestAnswersTabColumnsChangeInPlace:
+    """#732 against the real API: a new question goes in with Sheets' own
+    column insert, a stranded Date Modified with a column move to the grid's
+    right edge, and leadership's formula survives both."""
+
+    def test_new_question_and_stranded_date_modified_keep_formulas(
+        self, seeded_db, test_spreadsheet, squad_powers_tab
+    ):
+        ws, tab_name = squad_powers_tab
+        from unittest.mock import patch
+
+        from survey import update_squad_powers
+
+        # The grid ends at the last header, so the move lands on the right edge.
+        ws.resize(rows=10, cols=5)
+        ws.update(
+            "A1",
+            [
+                ["Username", "Discord ID", "Time Zone", "Date Modified", "Notes"],
+                ["TestMember Beta", "'222222", "UTC-5", "1/2/2026", '=C2&" note"'],
+            ],
+            value_input_option="USER_ENTERED",
+        )
+        survey = {
+            "tab_squad_powers": tab_name,
+            "questions": [
+                {"key": "tz", "label": "Time Zone", "type": "text", "options": []},
+                {"key": "role", "label": "Preferred Role", "type": "text", "options": []},
+            ],
+        }
+        with patch("survey._get_spreadsheet", return_value=test_spreadsheet):
+            update_squad_powers(
+                "222222", "TestMember Beta", {"tz": "UTC+2", "role": "Eng"}, survey=survey
+            )
+
+        time.sleep(1)
+        rows = ws.get_all_values(value_render_option="FORMULA")
+        assert rows[0][:6] == [
+            "Username",
+            "Discord ID",
+            "Time Zone",
+            "Notes",
+            "Preferred Role",
+            "Date Modified",
+        ]
+        assert rows[1][2] == "UTC+2"
+        assert rows[1][3] == '=C2&" note"'
+        assert rows[1][4] == "Eng"

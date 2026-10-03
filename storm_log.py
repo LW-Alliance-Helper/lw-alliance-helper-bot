@@ -1077,6 +1077,7 @@ def append_participation_row(
         get_or_create_worksheet,
         merge_sheet_header,
         row_for_header,
+        sheet_header_cells,
     )
 
     pcfg = get_participation_config(guild_id, event_type)
@@ -1089,7 +1090,7 @@ def append_participation_row(
     ws = get_or_create_worksheet(sh, tab, rows=200, cols=max(8, len(questions) + 4))
 
     desired = ["Date", "Event"] + [q.get("label", q.get("key", "?")) for q in questions]
-    existing_header = [c for c in ws.row_values(1) if c]
+    existing_header = sheet_header_cells(ws.row_values(1))
     header = merge_sheet_header(existing_header, desired)
     if header != existing_header:
         ws.update("A1", [header], value_input_option="USER_ENTERED")

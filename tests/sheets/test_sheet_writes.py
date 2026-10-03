@@ -211,7 +211,7 @@ class TestSurveySheetWrites:
         header = all_vals[0]
         data_rows = all_vals[1:]
 
-        assert "Timestamp" in header
+        assert "Timestamp (server time)" in header
         assert "Discord ID" in header
         assert len(data_rows) == 2
 

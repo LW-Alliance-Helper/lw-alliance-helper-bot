@@ -1023,3 +1023,120 @@ _PRE_EXISTING_EM_DASHES = (
 
 def _predates_the_rule(value: str) -> bool:
     return value.strip() == "—" or any(m in value for m in _PRE_EXISTING_EM_DASHES)
+
+
+# ── #729: the headers say who is who, IDs as text, the house style ───────────
+
+
+def test_the_buddy_header_names_each_block():
+    assert buddy.BUDDY_HEADER == [
+        "Discord ID",
+        "War Leader",
+        "Profession",
+        "Discord ID",
+        "Engineer",
+        "Profession",
+        "Discord ID",
+        "Second Engineer",
+        "Profession",
+    ]
+
+
+def test_old_name_headers_are_renamed_by_position_only_from_the_old_text():
+    from unittest.mock import MagicMock
+
+    ws = MagicMock()
+    # The middle block's header was renamed by an officer: it stays theirs.
+    header = ["Discord ID", "Name", "Profession", "Discord ID", "Giver", "Profession"]
+    header += ["Discord ID", "Name", "Profession"]
+    buddy._rename_name_headers(ws, header)
+
+    assert header[1] == "War Leader" and header[4] == "Giver" and header[7] == "Second Engineer"
+    updates = ws.batch_update.call_args.args[0]
+    assert updates == [
+        {"range": "B1", "values": [["War Leader"]]},
+        {"range": "H1", "values": [["Second Engineer"]]},
+    ]
+    assert ws.batch_update.call_args.kwargs["value_input_option"] == "RAW"
+
+
+def test_new_headers_are_not_rewritten():
+    from unittest.mock import MagicMock
+
+    ws = MagicMock()
+    buddy._rename_name_headers(ws, list(buddy.BUDDY_HEADER))
+    ws.batch_update.assert_not_called()
+
+
+def test_save_pairs_adopts_the_id_columns_before_writing_and_formats_after(sheets):
+    from unittest.mock import MagicMock
+
+    order = MagicMock()
+    members = [W("Walt", "100000000000000001"), E("Eve", "100000000000000002")]
+    result = assign_buddies(members, [])
+    real_write = buddy._write_body
+
+    def write(*a, **k):
+        order.write()
+        return real_write(*a, **k)
+
+    with (
+        patch("sheet_identity.adopt_columns", side_effect=lambda *a, **k: order.adopt(*a, **k)),
+        patch("sheet_format.ensure_formatted", side_effect=lambda *a, **k: order.fmt(*a, **k)),
+        patch("buddy._write_body", side_effect=write),
+    ):
+        assert buddy.save_pairs(GID, "Buddies", result, "Squad Powers", "Profession") is True
+
+    names = [c[0] for c in order.mock_calls]
+    assert names == ["adopt", "write", "fmt"]
+    assert order.adopt.call_args.args[1] == [0, 3, 6]
+    assert order.adopt.call_args.kwargs["guild_id"] == GID
+    spec = order.fmt.call_args.args[1]
+    assert spec.text == (0, 3, 6) and spec.frozen_columns == 2
+
+
+def test_save_pairs_renames_an_old_tab_header_after_the_write(sheets):
+    old = ["Discord ID", "Name", "Profession"] * 3
+    sheets["Buddies"] = FakeWS([old])
+    members = [W("Walt", "1"), E("Eve", "3")]
+    with patch("buddy._rename_name_headers") as rename:
+        buddy.save_pairs(GID, "Buddies", assign_buddies(members, []), "Squad Powers", "Profession")
+    assert rename.call_args.args[1] == old
+
+
+def test_a_failed_buddy_write_is_not_formatted(sheets):
+    members = [W("Walt", "1"), E("Eve", "3")]
+    with (
+        patch("buddy._write_body", return_value=False),
+        patch("sheet_format.ensure_formatted") as fmt,
+    ):
+        assert buddy.save_pairs(GID, "Buddies", assign_buddies(members, []), "SP", "P") is False
+    fmt.assert_not_called()
+
+
+def test_presets_adopt_both_id_columns_and_take_the_house_style(sheets):
+    members = [W("Walt", "1"), E("Eve", "3")]
+    with (
+        patch("sheet_identity.adopt_columns") as adopt,
+        patch("sheet_format.ensure_formatted") as fmt,
+    ):
+        assert buddy.save_preset(GID, "Buddy Presets", "Season", assign_buddies(members, []))
+    assert adopt.call_args.args[1] == [1, 3]
+    spec = fmt.call_args.args[1]
+    assert spec.text == (1, 3) and spec.frozen_columns == 1
+
+
+def test_write_profession_cell_adopts_a_headed_id_column(sheets):
+    sheets["Squad Powers"] = FakeWS([["Username", "Discord ID", "Profession"]])
+    with patch("sheet_identity.adopt_columns") as adopt:
+        buddy.write_profession_cell(GID, "Squad Powers", "Profession", "7", "Alpha", "Engineer")
+    assert adopt.call_args.args[1] == [1]
+
+
+def test_write_profession_cell_leaves_a_guessed_column_alone(sheets):
+    """No "Discord ID" header: column B is only a guess, and could be the
+    alliance's own data, so it is not tagged or made text."""
+    sheets["Squad Powers"] = FakeWS([["Username", "Power", "Profession"]])
+    with patch("sheet_identity.adopt_columns") as adopt:
+        buddy.write_profession_cell(GID, "Squad Powers", "Profession", "7", "Alpha", "Engineer")
+    adopt.assert_not_called()

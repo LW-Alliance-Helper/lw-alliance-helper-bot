@@ -30,25 +30,36 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import sheet_format
+import sheet_identity
+
 # Canonical profession labels (the Squad Powers survey ships these).
 WAR_LEADER = "War Leader"
 ENGINEER = "Engineer"
 
 # Member-centric layout of the bot-owned Buddies tab. Three repeated blocks:
 # the War Leader (receiver), then up to two Engineer buddies (givers). Every
-# person appears exactly once. Headers repeat per block so the sheet reads
-# cleanly for leadership.
+# person appears exactly once. Each block's name column is headed by who sits
+# in it, so the sheet says who is who (#729); every reader is positional.
+SECOND_ENGINEER = "Second Engineer"
 BUDDY_HEADER = [
     "Discord ID",
-    "Name",
+    WAR_LEADER,
     "Profession",  # War Leader
     "Discord ID",
-    "Name",
+    ENGINEER,
     "Profession",  # Engineer buddy 1
     "Discord ID",
-    "Name",
+    SECOND_ENGINEER,
     "Profession",  # Engineer buddy 2 (double pairing)
 ]
+
+# The three name columns were all headed "Name" before #729, which a rename by
+# text can't tell apart, so they are renamed by position, and only while the
+# cell still holds the old text.
+_OLD_NAME_HEADER = "Name"
+_NAME_HEADERS = {1: WAR_LEADER, 4: ENGINEER, 7: SECOND_ENGINEER}
+_ID_COLUMNS = [0, 3, 6]
 
 
 # ── Small helpers ─────────────────────────────────────────────────────────────
@@ -612,6 +623,52 @@ def _col_letter(n: int) -> str:
     return out
 
 
+# The house style for the two bot-owned tabs (#729): IDs as text, the header
+# and the War Leader / preset name frozen.
+_PRESET_ID_COLUMNS = [1, 3]
+BUDDY_FORMAT = sheet_format.TabSpec(text=tuple(_ID_COLUMNS), frozen_columns=2)
+PRESET_FORMAT = sheet_format.TabSpec(text=tuple(_PRESET_ID_COLUMNS), frozen_columns=1)
+
+# Buddies tabs already finished in this process, so a save doesn't read the
+# header every time.
+_finished: set[tuple] = set()
+
+
+def _rename_name_headers(ws, header: list[str]) -> None:
+    """Head each block's name column by who sits in it, on a tab from before
+    #729. By position, and only while a cell still says "Name", so a header an
+    officer renamed stays theirs. `header` is updated in place. Best-effort."""
+    updates = []
+    for idx, new in _NAME_HEADERS.items():
+        if idx < len(header) and header[idx] == _OLD_NAME_HEADER:
+            header[idx] = new
+            updates.append({"range": f"{_col_letter(idx + 1)}1", "values": [[new]]})
+    if not updates:
+        return
+    try:
+        ws.batch_update(updates, value_input_option="RAW")
+    except Exception as e:
+        print(f"[BUDDY] Could not rename the name headers on '{getattr(ws, 'title', '?')}': {e}")
+
+
+def _finish_buddy_tab(ws, guild_id: int) -> None:
+    """After a write: the name headers say who is who, and the tab takes the
+    house style once (`sheet_format.ensure_formatted`)."""
+    sheet_id, spreadsheet = getattr(ws, "id", None), getattr(ws, "spreadsheet_id", None)
+    key = (spreadsheet, sheet_id) if isinstance(sheet_id, int) else None
+    if key is not None and key in _finished:
+        return
+    try:
+        header = ws.row_values(1)
+    except Exception as e:
+        print(f"[BUDDY] header read failed for guild {guild_id}: {e}")
+        return
+    _rename_name_headers(ws, header)
+    sheet_format.ensure_formatted(ws, BUDDY_FORMAT)
+    if key is not None:
+        _finished.add(key)
+
+
 # Rows of headroom the full rewrite clears past the longer of old/new body.
 # Enough to catch a stray row someone left just under the list; nowhere near
 # enough to reach content parked further down the tab.
@@ -1004,6 +1061,10 @@ def save_pairs(
     ws = _open_tab(guild_id, buddy_tab, BUDDY_HEADER)
     if ws is None:
         return False
+    # Before the write, so the IDs land in text cells: the Profession formulas
+    # MATCH them against Squad Powers' Discord ID column, which is text too, and
+    # MATCH never equates a number with text (#729).
+    sheet_identity.adopt_columns(ws, _ID_COLUMNS, guild_id=guild_id)
     cols = _resolve_profession_columns(guild_id, profession_tab, profession_col_header)
 
     # Group pairs by War Leader.
@@ -1062,7 +1123,10 @@ def save_pairs(
         )
         rownum += 1
 
-    return _write_body(ws, BUDDY_HEADER, body, guild_id, buddy_tab)
+    if not _write_body(ws, BUDDY_HEADER, body, guild_id, buddy_tab):
+        return False
+    _finish_buddy_tab(ws, guild_id)
+    return True
 
 
 def read_all_professions(
@@ -1236,8 +1300,10 @@ def write_profession_cell(
             pass
         values = [header]
         id_idx, prof_idx = 1, 2
+        headed_id = True
     else:
         id_idx = find("discord id")
+        headed_id = id_idx >= 0
         prof_idx = find((profession_col_header or "profession").strip().lower())
         if id_idx < 0:
             id_idx = 1  # survey convention: Discord ID in column B
@@ -1247,6 +1313,13 @@ def write_profession_cell(
                 ws.update_cell(1, prof_idx + 1, profession_col_header)
             except Exception:
                 pass
+
+    # The Discord ID column as text, as the survey writes it (#729): the Buddies
+    # tab's Profession formulas MATCH against it. Only a column headed "Discord
+    # ID"; the column-B guess could be anyone's. The tab's house style is the
+    # survey's to apply, since only the survey knows which columns hold numbers.
+    if headed_id:
+        sheet_identity.adopt_columns(ws, [id_idx], guild_id=guild_id)
 
     did = str(discord_id).strip()
     for i, row in enumerate(values[1:], start=2):
@@ -1356,7 +1429,7 @@ def save_preset(guild_id: int, preset_tab: str, name: str, result: PairingResult
     added = [
         [name, p.wl_discord_id, p.war_leader, p.eng_discord_id, p.engineer] for p in result.pairs
     ]
-    return _rewrite(ws, PRESET_HEADER, keep + added, guild_id, preset_tab, current_rows=len(rows))
+    return _rewrite_presets(ws, keep + added, guild_id, preset_tab, current_rows=len(rows))
 
 
 def delete_preset(guild_id: int, preset_tab: str, name: str) -> bool:
@@ -1368,4 +1441,16 @@ def delete_preset(guild_id: int, preset_tab: str, name: str) -> bool:
     keep = [r for r in rows if _cell(r, 0).lower() != want]
     if len(keep) == len(rows):
         return False
-    return _rewrite(ws, PRESET_HEADER, keep, guild_id, preset_tab, current_rows=len(rows))
+    return _rewrite_presets(ws, keep, guild_id, preset_tab, current_rows=len(rows))
+
+
+def _rewrite_presets(
+    ws, body_rows: list, guild_id: int, preset_tab: str, current_rows: int
+) -> bool:
+    """`_rewrite` for the preset tab, with its two ID columns adopted as text
+    first and the house style applied once after (#729)."""
+    sheet_identity.adopt_columns(ws, _PRESET_ID_COLUMNS, guild_id=guild_id)
+    if not _rewrite(ws, PRESET_HEADER, body_rows, guild_id, preset_tab, current_rows=current_rows):
+        return False
+    sheet_format.ensure_formatted(ws, PRESET_FORMAT)
+    return True

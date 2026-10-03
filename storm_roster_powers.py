@@ -36,6 +36,8 @@ import logging
 from dataclasses import dataclass
 from typing import Callable, Optional
 
+import sheet_format
+
 logger = logging.getLogger(__name__)
 
 _TRUTHY = {"1", "true", "yes", "y", "x", "t"}
@@ -209,7 +211,13 @@ def build_last_updated_index(
         return {}, {}, errors
 
     try:
-        values = ws.get_all_values()
+        # The date column read unformatted, as ISO: a real date cell (the
+        # survey's "Date Modified" since #729, or an alliance's own) shows in
+        # the alliance's locale, which the M/D guess below can misread. Every
+        # other column, and any date typed as text, reads as displayed.
+        values = sheet_format.read_values(
+            ws, sheet_format.TabSpec(date=(last_updated_col,)), keep_text=True
+        )
     except Exception as e:
         errors.append(f"last-updated source tab {tab_name!r} read failed: {e}")
         return {}, {}, errors

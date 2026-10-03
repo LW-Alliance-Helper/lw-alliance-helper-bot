@@ -672,3 +672,50 @@ class TestTrainStatsIdentity:
         history = [self._row("2026-05-01", "bravo")]
         target = ms.Target(name="Bravo", discord_id=111, joined="")
         assert ms._train_stats(history, target, {"vs"})[0] == 1
+
+
+# ── #729: the stamps and dates the bot writes now ────────────────────────────
+
+
+class TestFormattedTabs:
+    def test_parse_ts_reads_the_server_time_stamp(self):
+        from datetime import datetime
+
+        assert ms._parse_survey_ts("2026-09-28 20:00:05") == datetime(2026, 9, 28, 20, 0, 5)
+
+    def test_an_old_utc_stamp_moves_onto_the_server_clock(self):
+        """01:30 UTC on the 1st is still the 30th in server time (UTC-2)."""
+        from datetime import datetime
+
+        assert ms._parse_survey_ts("5/1/2026 01:30 UTC") == datetime(2026, 4, 30, 23, 30)
+
+    def test_last_response_reads_real_date_time_cells(self):
+        """A Date time cell reads unformatted as a serial number; old text
+        rows read as they are, and the newest of either kind wins."""
+        target = ms.Target(name="Alpha", discord_id=100000000000000001, joined="")
+        ws = MagicMock()
+        ws.get_all_values.return_value = [
+            ["Timestamp (server time)", "Discord ID", "Username"],
+            ["3/15/2026 10:00 UTC", "100000000000000001", "Alpha"],
+            [46293.8333333, "100000000000000001", "Alpha"],  # 2026-09-28 20:00
+        ]
+        sh = MagicMock()
+        sh.worksheet.return_value = ws
+        with patch("config.get_spreadsheet", return_value=sh):
+            assert ms._last_survey_response(GUILD, "Survey History", target) == "Sep 28, 2026"
+        assert ws.get_all_values.call_args.kwargs["value_render_option"] == "UNFORMATTED_VALUE"
+
+    def test_joined_shows_iso_when_the_roster_shows_a_locale_date(self):
+        import member_roster
+
+        member_roster._joined_reads.clear()
+        rows = [ROSTER[0], ["111", "bob_acct", "Bob", "12/08/2025", "Member"]]
+        ws = MagicMock()
+        ws.batch_get.return_value = [[[45881]]]  # 2025-08-12
+        with (
+            patch("config.get_member_roster_config", return_value=_roster_cfg()),
+            patch("config.read_member_roster_values", return_value=rows),
+            patch("config.get_member_roster_sheet", return_value=ws),
+        ):
+            assert ms._resolve_self(GUILD, 111).joined == "2025-08-12"
+            assert ms._resolve_named(GUILD, "bob").joined == "2025-08-12"

@@ -24,6 +24,7 @@ Commands:
 
 import asyncio
 import logging
+import re
 from datetime import datetime, timezone
 
 import discord
@@ -32,6 +33,8 @@ from discord.ext import commands
 
 import config_health
 import premium
+import sheet_format
+import sheet_identity
 from config import (
     get_config,
     get_member_roster_config,
@@ -80,10 +83,26 @@ def _note_roster_sheet_ok(guild_id: int) -> None:
 # ── Sync logic (pure-ish; takes a guild and config) ───────────────────────────
 
 
-def _format_joined(member: discord.Member) -> str:
+def _format_joined(member: discord.Member, tz=None) -> str:
+    """The day the member joined, ISO, in the alliance's timezone `tz` (#729):
+    a fact about a person, so their calendar, not the game's. Sheets reads ISO
+    as a real date for the column's Date format. No `tz` keeps Discord's UTC."""
     if member.joined_at is None:
         return ""
-    return member.joined_at.strftime("%Y-%m-%d")
+    joined = member.joined_at.astimezone(tz) if tz is not None else member.joined_at
+    return joined.strftime("%Y-%m-%d")
+
+
+def _alliance_zone(guild_id: int):
+    """The alliance's timezone from setup (ET when it has none or can't be read)."""
+    from time_helpers import guild_zone
+
+    try:
+        cfg = get_config(guild_id)
+    except Exception as e:
+        print(f"[ROSTER] Could not read the timezone for guild {guild_id}: {e}")
+        cfg = None
+    return guild_zone(cfg)
 
 
 def _format_roles(member: discord.Member) -> str:
@@ -101,18 +120,32 @@ def _eligible(member: discord.Member, role_filter_id: int) -> bool:
     return any(r.id == role_filter_id for r in member.roles)
 
 
-def _bot_managed_cols(cfg: dict) -> dict[int, tuple[str, callable]]:
+def _bot_managed_cols(cfg: dict, tz=None) -> dict[int, tuple[str, callable]]:
     """The column indices the bot owns and overwrites on every sync,
     keyed by index. Anything outside this set on the Sheet is alliance-
     owned data (custom power columns, the `not_on_discord` flag, etc.)
-    and must be preserved across sync calls."""
+    and must be preserved across sync calls. `tz` is the alliance's
+    timezone, for the Joined date."""
     return {
         cfg["discord_id_col"]: ("Discord ID", lambda m: str(m.id)),
         cfg["name_col"]: ("Name", lambda m: m.name),
         cfg["display_col"]: ("Display Name", lambda m: m.display_name),
-        cfg["joined_col"]: ("Joined", _format_joined),
+        cfg["joined_col"]: ("Joined", lambda m: _format_joined(m, tz)),
         cfg["roles_col"]: ("Roles", lambda m: _format_roles(m)),
     }
+
+
+def roster_format(cfg: dict) -> sheet_format.TabSpec:
+    """The roster's house style (#729): Joined as a date, Discord ID as text,
+    and the header and Name column frozen. Only the freeze reaches past the
+    bot's own columns, so it is skipped when Name sits further right than the
+    third column (an alliance's own layout), rather than freezing half the tab."""
+    name_col = int(cfg.get("name_col", 1))
+    return sheet_format.TabSpec(
+        date=(int(cfg.get("joined_col", 3)),),
+        text=(int(cfg.get("discord_id_col", 0)),),
+        frozen_columns=name_col + 1 if name_col < 3 else 0,
+    )
 
 
 # ── Layout detection (#226 follow-up) ──────────────────────────────────────
@@ -262,16 +295,81 @@ def read_roster_members(guild_id: int) -> list[dict]:
 
     Degrades to an empty list (never raises) when the roster isn't configured or
     the sheet can't be read, so the API returns an empty roster rather than a
-    500. The underlying read is cached (`read_member_roster_values`)."""
+    500. The underlying read is cached (`read_member_roster_values`), and the
+    Joined column reads as ISO (`read_roster_values`)."""
     import config
 
     try:
         rcfg = config.get_member_roster_config(guild_id)
-        values = config.read_member_roster_values(guild_id, rcfg.get("tab_name") or "Member Roster")
+        values = read_roster_values(guild_id, rcfg)
     except Exception as e:
         print(f"[ROSTER] Could not read roster for guild {guild_id}: {e}")
         return []
     return parse_roster_rows(rcfg, values)
+
+
+# ── Reading Joined back (#729) ───────────────────────────────────────────────
+#
+# Joined is a real date with the Date format, so the cached roster read
+# (`config.read_member_roster_values`, the displayed text) shows it in the
+# alliance's locale: 9/28/2026 here, 28/09/2026 elsewhere. A reader that shows
+# or sends the date (`/member_stats`, the Map Manager roster) reads it through
+# here instead, which re-reads just that column unformatted and gives it back
+# as ISO. Only when a cell isn't ISO already, so a tab still showing ISO costs
+# nothing extra, and once per cached read.
+
+_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+# (guild, tab) → (the cached read it was made from, that read with ISO dates).
+_joined_reads: dict[tuple[int, str], tuple[list, list]] = {}
+
+
+def read_roster_values(guild_id: int, rcfg: dict | None = None) -> list[list[str]]:
+    """The roster tab's rows (the cached `read_member_roster_values`) with the
+    Joined column as `YYYY-MM-DD` whatever the locale shows. Raises like that
+    read; a failed date re-read logs and leaves the column as shown."""
+    import config
+
+    if rcfg is None:
+        rcfg = config.get_member_roster_config(guild_id)
+    tab = rcfg.get("tab_name") or "Member Roster"
+    values = config.read_member_roster_values(guild_id, tab)
+    return _with_iso_joined(guild_id, tab, values, int(rcfg.get("joined_col", 3)))
+
+
+def _with_iso_joined(guild_id: int, tab: str, values: list, joined_col: int) -> list:
+    """`values` with the Joined column re-read unformatted, as ISO; `values`
+    itself (the shared cached read) is never changed."""
+    if len(values) < 2 or all(
+        not cell or _ISO_DATE.match(cell)
+        for cell in (_roster_cell(r, joined_col) for r in values[1:])
+    ):
+        return values
+    key = (guild_id, tab)
+    hit = _joined_reads.get(key)
+    if hit is not None and hit[0] is values:
+        return hit[1]
+    import config
+    from gspread.utils import rowcol_to_a1
+
+    first, last = rowcol_to_a1(2, joined_col + 1), rowcol_to_a1(len(values), joined_col + 1)
+    try:
+        ws = config.get_member_roster_sheet(guild_id, tab)
+        got = ws.batch_get(
+            [f"{first}:{last}"],
+            value_render_option="UNFORMATTED_VALUE",
+            date_time_render_option="SERIAL_NUMBER",
+        )
+    except Exception as e:
+        print(f"[ROSTER] Could not read the Joined dates for guild {guild_id}: {e}")
+        return values
+    out = [list(r) for r in values]
+    column = got[0] if got else []
+    for offset, cell in enumerate(column or []):
+        row = out[offset + 1] if offset + 1 < len(out) else None
+        if row is not None and joined_col < len(row):
+            row[joined_col] = sheet_format.date_cell(cell[0] if cell else "")
+    _joined_reads[key] = (values, out)
+    return out
 
 
 def roster_identity_map(guild_id: int) -> dict[str, str]:
@@ -427,7 +525,7 @@ def _build_roster_rows(guild: discord.Guild, cfg: dict) -> list[list[str]]:
     strings so each row is at least max(col_index)+1 cells wide.
     """
     role_filter = cfg.get("role_filter_id", 0)
-    cols = _bot_managed_cols(cfg)
+    cols = _bot_managed_cols(cfg, _alliance_zone(guild.id))
     width = max(cols.keys()) + 1
 
     header_row = [""] * width
@@ -700,6 +798,10 @@ def write_roster(guild: discord.Guild, cfg: dict) -> tuple[int, dict]:
     _warn_if_cache_looks_thin(guild)
     new_rows = _build_roster_rows(guild, cfg)
     ws = get_member_roster_sheet(guild.id, cfg["tab_name"])
+    # The Discord ID column as text before the write, so an ID never reads as a
+    # number. Tagged like every ID column; its visibility changes only once the
+    # alliance has answered the /setup question (#729).
+    sheet_identity.adopt_columns(ws, [cfg["discord_id_col"]], guild_id=guild.id)
     # No fallback on a failed read (#678). The existing rows are where the
     # alliance's own columns come from, so treating a failed read as an empty
     # tab rewrote the tab without them, and the next sync read that back.
@@ -723,6 +825,8 @@ def write_roster(guild: discord.Guild, cfg: dict) -> tuple[int, dict]:
     grid = cover_previous_extent(merged, existing)
     if grid:
         ws.update("A1", grid, value_input_option="USER_ENTERED")
+    # Once per tab; a roster the alliance already styled is left as it is.
+    sheet_format.ensure_formatted(ws, roster_format(cfg))
     # Apply the Yes/No dropdown data-validation rule on the new column.
     # Best-effort — a Sheets API failure here doesn't roll back the row
     # write (the column's values are correct either way).

@@ -1369,3 +1369,144 @@ class TestMergeWithNameFallback:
         )
         assert report["matched_by_id"] == ["12345"]
         assert report["matched_by_name"] == []
+
+
+# ── #729: Joined in the alliance's timezone, as a real date ──────────────────
+
+
+def _serial(day) -> int:
+    """A date as Sheets stores it unformatted."""
+    from datetime import date
+
+    return (day - date(1899, 12, 30)).days
+
+
+class TestJoinedDate:
+    def test_joined_is_the_alliance_day_not_utc(self):
+        """02:00 UTC on the 28th is still the 27th in Los Angeles."""
+        from zoneinfo import ZoneInfo
+
+        from member_roster import _format_joined
+
+        m = _make_member(1, "Alpha", joined_at=datetime(2026, 9, 28, 2, 0, tzinfo=timezone.utc))
+        assert _format_joined(m, ZoneInfo("America/Los_Angeles")) == "2026-09-27"
+        assert _format_joined(m) == "2026-09-28"  # no zone: Discord's UTC, as before
+
+    def test_build_rows_uses_the_guild_timezone(self):
+        from member_roster import _build_roster_rows
+
+        guild = MagicMock()
+        guild.id = TEST_GUILD_ID
+        guild.members = [
+            _make_member(1, "Alpha", joined_at=datetime(2026, 9, 28, 2, 0, tzinfo=timezone.utc))
+        ]
+        cfg = MagicMock(timezone="Asia/Tokyo")
+        with patch("member_roster.get_config", return_value=cfg):
+            assert _build_roster_rows(guild, _default_cfg())[1][3] == "2026-09-28"
+        cfg.timezone = "America/Los_Angeles"
+        with patch("member_roster.get_config", return_value=cfg):
+            assert _build_roster_rows(guild, _default_cfg())[1][3] == "2026-09-27"
+
+    def test_roster_format(self):
+        from member_roster import roster_format
+
+        spec = roster_format(_default_cfg())
+        assert spec.date == (3,) and spec.text == (0,) and spec.frozen_columns == 2
+        assert spec.quantity == () and spec.dropdowns == ()
+
+    def test_a_name_column_far_right_freezes_only_the_header(self):
+        from member_roster import roster_format
+
+        cfg = {**_default_cfg(), "name_col": 7, "joined_col": 9, "discord_id_col": 8}
+        spec = roster_format(cfg)
+        assert spec.frozen_columns == 0 and spec.date == (9,) and spec.text == (8,)
+
+    def test_write_roster_adopts_the_id_column_first_and_formats_after(self, seeded_db):
+        from member_roster import write_roster
+
+        guild = MagicMock()
+        guild.id = TEST_GUILD_ID
+        guild.members = [_make_member(1, "Alpha")]
+        ws = MagicMock()
+        ws.get_all_values.return_value = []
+        order = MagicMock()
+        ws.update.side_effect = lambda *a, **k: order.write()
+        with (
+            patch("member_roster.get_member_roster_sheet", return_value=ws),
+            patch("member_roster.get_spreadsheet", return_value=None),
+            patch("sheet_identity.adopt_columns", side_effect=lambda *a, **k: order.adopt(*a, **k)),
+            patch("sheet_format.ensure_formatted", side_effect=lambda *a, **k: order.fmt(*a, **k)),
+        ):
+            write_roster(guild, _default_cfg())
+        assert [c[0] for c in order.mock_calls] == ["adopt", "write", "fmt"]
+        assert order.adopt.call_args.args[1] == [0]
+        assert order.fmt.call_args.args[1].date == (3,)
+
+
+class TestReadRosterValues:
+    ROWS = [
+        ["Discord ID", "Name", "Display Name", "Joined", "Roles"],
+        ["100000000000000001", "alpha", "Alpha", "9/28/2026", ""],
+        ["", "Bravo", "Bravo", "", ""],
+    ]
+
+    def setup_method(self):
+        import member_roster
+
+        member_roster._joined_reads.clear()
+
+    def test_iso_dates_cost_no_extra_read(self):
+        import member_roster
+
+        rows = [self.ROWS[0], ["1", "a", "A", "2026-09-28", ""]]
+        with (
+            patch("config.read_member_roster_values", return_value=rows),
+            patch("config.get_member_roster_sheet") as open_tab,
+        ):
+            assert member_roster.read_roster_values(TEST_GUILD_ID, _default_cfg()) is rows
+        open_tab.assert_not_called()
+
+    def test_a_locale_date_reads_back_as_iso_once_per_cached_read(self):
+        from datetime import date
+
+        import member_roster
+
+        ws = MagicMock()
+        ws.batch_get.return_value = [[[_serial(date(2026, 9, 28))], []]]
+        with (
+            patch("config.read_member_roster_values", return_value=self.ROWS),
+            patch("config.get_member_roster_sheet", return_value=ws),
+        ):
+            first = member_roster.read_roster_values(TEST_GUILD_ID, _default_cfg())
+            again = member_roster.read_roster_values(TEST_GUILD_ID, _default_cfg())
+
+        assert first[1][3] == "2026-09-28" and first[2][3] == ""
+        assert self.ROWS[1][3] == "9/28/2026"  # the shared cached read is untouched
+        assert again is first and ws.batch_get.call_count == 1
+        assert ws.batch_get.call_args.args[0] == ["D2:D3"]
+        assert ws.batch_get.call_args.kwargs["value_render_option"] == "UNFORMATTED_VALUE"
+
+    def test_a_failed_date_read_leaves_the_column_as_shown(self):
+        import member_roster
+
+        with (
+            patch("config.read_member_roster_values", return_value=self.ROWS),
+            patch("config.get_member_roster_sheet", side_effect=RuntimeError("quota")),
+        ):
+            assert member_roster.read_roster_values(TEST_GUILD_ID, _default_cfg()) is self.ROWS
+
+    def test_the_map_manager_roster_sends_iso(self):
+        from datetime import date
+
+        import member_roster
+
+        ws = MagicMock()
+        ws.batch_get.return_value = [[[_serial(date(2026, 9, 28))], []]]
+        with (
+            patch("config.get_member_roster_config", return_value=_default_cfg()),
+            patch("config.read_member_roster_values", return_value=self.ROWS),
+            patch("config.get_member_roster_sheet", return_value=ws),
+        ):
+            rows = member_roster.read_roster_members(TEST_GUILD_ID)
+        assert rows[0]["joined_at"] == "2026-09-28"
+        assert rows[1]["joined_at"] is None

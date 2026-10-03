@@ -48,8 +48,10 @@ import re
 from dataclasses import dataclass, field, replace
 from typing import Callable, Iterable, Mapping, Sequence
 
+import sheet_format
 import transfer
 import vs_labels
+from sheet_words import Words
 from storm_date_helpers import parse_event_date
 
 logger = logging.getLogger(__name__)
@@ -363,6 +365,75 @@ SHEET_COLUMNS: tuple[str, ...] = (
     COL_NOTES,
 )
 
+#: Columns that hold a full number, shown as `#,##0` (#729). The readers strip
+#: the grouping commas (`survey.parse_magnitude_input`).
+QUANTITY_COLUMNS: tuple[str, ...] = (
+    COL_POWER,
+    COL_MEMBERS,
+    *(day_score_col(d) for d in range(1, 7)),
+    COL_WEEK_SCORE,
+)
+
+# ── Words in the cells (#729) ─────────────────────────────────────────────────
+#
+# The tab holds words an officer can read, never the codes the logic runs on.
+# In memory a result stays "W" / "L" and an intent stays `INTENT_*`; only the
+# cell changes. Every reader goes through `parse_outcome` / `parse_intent`,
+# which take the old codes and the words in any case, so rows written before
+# #729 keep working. The tab is never rewritten wholesale, so an old row keeps
+# its codes until the bot next writes that cell.
+
+#: Day 1-6 Outcome, Week Outcome and Picked ("picked to win / lose"), as the
+#: game shows a result.
+OUTCOME_WORDS = Words({"W": "Win", "L": "Lose"})
+
+#: Intent, in the words on the declaration buttons
+#: (`alliance_duel_entry.VS_BTN_PUSH` / `VS_BTN_SAVE`; a test holds them
+#: together). Clearing the declaration writes a blank cell: nothing reads an
+#: explicit "none" differently from a week never declared.
+INTENT_SHEET_WORDS = Words(
+    {INTENT_PUSH: "Push to win", INTENT_SAVE: "Save for a later week"},
+)
+
+#: Columns that get a dropdown of `OUTCOME_WORDS`.
+OUTCOME_COLUMNS: tuple[str, ...] = (
+    *(day_outcome_col(d) for d in range(1, 7)),
+    COL_WEEK_OUTCOME,
+    COL_PICKED,
+)
+
+
+def tab_format(header: Sequence[str]) -> sheet_format.TabSpec:
+    """The house style for a VS tab with this header (#729).
+
+    Columns sit wherever the header puts them, so every index comes from the
+    header text. A column the tab doesn't have is left out. Only the header
+    row is frozen: the name column (Tag) sits seventh, and freezing seven
+    columns would leave no room on a phone."""
+    hidx = transfer.header_index(list(header))
+
+    def cols(names: Iterable[str]) -> tuple[int, ...]:
+        found = (hidx.get(transfer.norm_header(n)) for n in names)
+        return tuple(sorted(i for i in found if i is not None))
+
+    return sheet_format.TabSpec(
+        quantity=cols(QUANTITY_COLUMNS),
+        text=cols((COL_PICKED_BY,)),
+        date=cols((COL_WEEK_DATE,)),
+        dropdowns=(
+            *((c, OUTCOME_WORDS.options) for c in cols(OUTCOME_COLUMNS)),
+            *((c, INTENT_SHEET_WORDS.options) for c in cols((COL_INTENT,))),
+        ),
+    )
+
+
+def picked_by_column(header: Sequence[str]) -> int:
+    """Where Picked By sits in `header` (0-based), or -1. It holds the Discord
+    ID of whoever made a pick through Discord (#729)."""
+    idx = transfer.header_index(list(header)).get(transfer.norm_header(COL_PICKED_BY))
+    return -1 if idx is None else idx
+
+
 #: Columns whose value persists across rows for the same alliance — the
 #: latest non-blank one wins. Nobody re-scouts 15 alliances weekly, so most of
 #: these cells stay empty and the ones that do get filled become the
@@ -436,9 +507,11 @@ _LOSS_TOKENS = {"l", "loss", "lost", "lose", "0", "n", "no", "false", "x"}
 
 def parse_outcome(value) -> str | None:
     """Read a W/L cell into ``"W"`` / ``"L"``, or ``None`` when blank or
-    unrecognised. Deliberately permissive about what leadership types into a
-    spreadsheet, and deliberately silent about anything else — a typo is caught
-    by "Check my data for errors" (#399, #651), not coerced into a result here."""
+    unrecognised. The bot writes ``Win`` / ``Lose`` (:data:`OUTCOME_WORDS`);
+    the old ``W`` / ``L`` read the same. Deliberately permissive about what
+    leadership types into a spreadsheet, and deliberately silent about
+    anything else — a typo is caught by "Check my data for errors" (#399,
+    #651), not coerced into a result here."""
     if value is None:
         return None
     s = str(value).strip().casefold()
@@ -452,7 +525,12 @@ def parse_outcome(value) -> str | None:
 
 
 def parse_intent(value) -> str | None:
-    """Read the Intent column into one of :data:`INTENTS`, or ``None``."""
+    """Read the Intent column into one of :data:`INTENTS`, or ``None``.
+
+    Takes the words the bot writes (``Push to win``, ``Save for a later
+    week``, :data:`INTENT_SHEET_WORDS`) and the codes it wrote before #729
+    (``push``, ``save``, ``none``), in any case. A blank cell is ``None``,
+    which every reader treats as undeclared, the same as ``none``."""
     if value is None:
         return None
     s = str(value).strip().casefold()
@@ -875,7 +953,12 @@ def row_values(row: AllianceWeek) -> dict[str, str]:
 
     Only non-empty values appear. That is what makes the upsert non-clobbering:
     a field the bot has nothing to say about is absent from this dict and so is
-    never written, leaving whatever the user typed in place.
+    never written, leaving whatever the user typed in place. The one blank it
+    writes is a cleared declaration (`INTENT_NONE`), which empties Intent.
+
+    Results and intents are written as words (#729): ``Win`` / ``Lose``,
+    ``Push to win`` / ``Save for a later week``. Week Date is ISO, which
+    Sheets takes as a real date under ``USER_ENTERED``.
     """
     out: dict[str, str] = {
         COL_SEASON: row.league.season,
@@ -902,21 +985,23 @@ def row_values(row: AllianceWeek) -> dict[str, str]:
         if d in row.day_scores:
             out[day_score_col(d)] = str(row.day_scores[d])
         if d in row.day_outcomes:
-            out[day_outcome_col(d)] = row.day_outcomes[d]
+            out[day_outcome_col(d)] = OUTCOME_WORDS.word(row.day_outcomes[d])
     if row.week_score is not None:
         out[COL_WEEK_SCORE] = str(row.week_score)
     if row.week_outcome:
-        out[COL_WEEK_OUTCOME] = row.week_outcome
+        out[COL_WEEK_OUTCOME] = OUTCOME_WORDS.word(row.week_outcome)
     if row.known_1_5:
         out[COL_KNOWN_1_5] = row.known_1_5
     if row.known_6:
         out[COL_KNOWN_6] = row.known_6
     if row.picked:
-        out[COL_PICKED] = row.picked
+        out[COL_PICKED] = OUTCOME_WORDS.word(row.picked)
     if row.picked_by:
         out[COL_PICKED_BY] = row.picked_by
-    if row.intent:
-        out[COL_INTENT] = row.intent
+    if row.intent == INTENT_NONE:
+        out[COL_INTENT] = ""
+    elif row.intent:
+        out[COL_INTENT] = INTENT_SHEET_WORDS.word(row.intent)
     if row.notes:
         out[COL_NOTES] = row.notes
     return out

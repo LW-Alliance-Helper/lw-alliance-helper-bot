@@ -388,6 +388,129 @@ class _FakeWorksheet:
         return [list(ad.SHEET_COLUMNS)]
 
 
+# ── Reading and formatting the tab (#729) ─────────────────────────────────────
+
+
+def _serial(d: _dt.date) -> int:
+    """A date as Sheets stores it: days since 1899-12-30."""
+    return (d - _dt.date(1899, 12, 30)).days
+
+
+class _DatedSheet:
+    """A VS tab whose Week Date column carries the Date format: shown in a
+    D/M locale, stored as a serial. Records which columns were re-read."""
+
+    def __init__(self, header, rows, date_col):
+        self.header, self.rows, self.date_col = list(header), rows, date_col
+        self.ranges = []
+
+    def get_all_values(self):
+        return [list(self.header), *[list(r) for r in self.rows]]
+
+    def batch_get(self, ranges, **kw):
+        self.ranges.append(list(ranges))
+        out = []
+        for a1 in ranges:
+            col = ad.transfer.col_letter_to_index(a1.split("2:")[0])
+            if col == self.date_col:
+                out.append([[self._stored[i]] for i in range(len(self.rows))])
+            else:
+                out.append([[r[col]] for r in self.rows])
+        return out
+
+
+def _dated_row(header, shown):
+    row = [""] * len(header)
+    for name, value in (
+        (ad.COL_SEASON, "S36"),
+        (ad.COL_TIER, "Diamond"),
+        (ad.COL_GROUP, "12 - 1"),
+        (ad.COL_WEEK, "1"),
+        (ad.COL_TAG, "ABC"),
+        (ad.COL_WARZONE, "999"),
+        (ad.COL_WEEK_DATE, shown),
+        (ad.COL_POWER, "301,000,000"),
+    ):
+        if name in header:
+            row[header.index(name)] = value
+    return row
+
+
+def test_read_tab_reads_week_date_as_a_date_whatever_the_locale_shows():
+    header = list(ad.SHEET_COLUMNS)
+    date_col = header.index(ad.COL_WEEK_DATE)
+    sheet = _DatedSheet(header, [_dated_row(header, "28/09/2026")], date_col)
+    sheet._stored = [_serial(_dt.date(2026, 9, 28))]
+
+    values = ads.read_tab(sheet)
+    rows = ad.parse_rows(values)
+
+    assert values[1][date_col] == "2026-09-28"
+    assert rows[0].week_date == _dt.date(2026, 9, 28)
+    assert rows[0].power == 301_000_000  # the shown "#,##0" text still reads
+    assert len(sheet.ranges) == 1  # the bot's own layout reads once
+
+
+def test_read_tab_finds_a_moved_week_date_by_its_header():
+    header = [
+        ad.COL_WEEK_DATE,
+        "Our column",
+        *[h for h in ad.SHEET_COLUMNS if h != ad.COL_WEEK_DATE],
+    ]
+    sheet = _DatedSheet(header, [_dated_row(header, "28/09/2026")], 0)
+    sheet._stored = [_serial(_dt.date(2026, 9, 28))]
+
+    values = ads.read_tab(sheet)
+
+    assert values[1][0] == "2026-09-28"
+    assert ad.parse_rows(values)[0].week_date == _dt.date(2026, 9, 28)
+    # The guess at the bot's layout is thrown away, not half-applied.
+    assert values[1][header.index(ad.COL_SEASON)] == "S36"
+    assert sheet.ranges[-1] == ["A2:A"]
+
+
+def test_read_tab_keeps_a_typed_week_date_as_typed():
+    header = list(ad.SHEET_COLUMNS)
+    date_col = header.index(ad.COL_WEEK_DATE)
+    sheet = _DatedSheet(header, [_dated_row(header, "2026-09-28")], date_col)
+    sheet._stored = ["2026-09-28"]  # a text cell from before the format
+
+    assert ad.parse_rows(ads.read_tab(sheet))[0].week_date == _dt.date(2026, 9, 28)
+
+
+def test_before_write_adopts_picked_by_as_an_id_column(monkeypatch):
+    import sheet_identity
+
+    seen = []
+    monkeypatch.setattr(
+        sheet_identity, "adopt_columns", lambda ws, cols, guild_id: seen.append((cols, guild_id))
+    )
+    header = list(ad.SHEET_COLUMNS)
+    ads.before_write(object(), header, 1234)
+    assert seen == [([header.index(ad.COL_PICKED_BY)], 1234)]
+
+    seen.clear()
+    ads.before_write(object(), [h for h in header if h != ad.COL_PICKED_BY], 1234)
+    assert seen == []
+
+
+def test_after_write_formats_against_the_live_header(monkeypatch):
+    import sheet_format
+
+    seen = []
+    monkeypatch.setattr(sheet_format, "ensure_formatted", lambda ws, spec: seen.append(spec))
+    header = ["Mine", *ad.SHEET_COLUMNS]
+    ads.after_write(object(), header)
+    assert seen == [ad.tab_format(header)]
+    assert seen[0].date == (header.index(ad.COL_WEEK_DATE),)
+
+
+def test_the_column_guide_asks_for_the_words_the_bot_writes():
+    text = _all_text(ads.column_guide_embed())
+    assert "`Win` or `Lose`" in text
+    assert "`W`" not in text and "`L`" not in text
+
+
 # ── /setup grid and /help wiring ──────────────────────────────────────────────
 
 

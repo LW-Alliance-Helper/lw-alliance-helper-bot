@@ -98,8 +98,12 @@ async def save_rows(state, rows: list[ad.AllianceWeek], *, actor=None, observed=
     def _write():
         spreadsheet = config.get_spreadsheet(state.guild_id)
         worksheet = ad_setup.ensure_tab(spreadsheet, tab)
-        plan = ad.plan_upsert(worksheet.get_all_values(), rows)
+        values = ad_setup.read_tab(worksheet)
+        header = list(values[0]) if values else list(ad.SHEET_COLUMNS)
+        plan = ad.plan_upsert(values, rows)
+        ad_setup.before_write(worksheet, header, state.guild_id)
         ad.apply_upsert(worksheet, plan)
+        ad_setup.after_write(worksheet, header)
         return plan
 
     try:
@@ -255,7 +259,7 @@ async def rename_league(state, new_league: ad.LeagueKey, *, actor=None) -> tuple
     def _write() -> int:
         spreadsheet = config.get_spreadsheet(state.guild_id)
         worksheet = ad_setup.ensure_tab(spreadsheet, tab)
-        values = worksheet.get_all_values()
+        values = ad_setup.read_tab(worksheet)
         header = list(values[0]) if values else list(ad.SHEET_COLUMNS)
         hidx = transfer.header_index(header)
         rows = [r for r in ad.parse_rows(values) if r.league == old_league and r.row_number]
@@ -275,6 +279,7 @@ async def rename_league(state, new_league: ad.LeagueKey, *, actor=None) -> tuple
 
         if updates:
             ad.apply_upsert(worksheet, ad.UpsertPlan(updates=tuple(updates)))
+            ad_setup.after_write(worksheet, header)
         return len(rows)
 
     try:
@@ -1356,8 +1361,9 @@ VS_BTN_SAVE = "Save for a later week"
 VS_BTN_CLEAR_INTENT = "Clear the declaration"
 VS_BTN_ANNOUNCE = "📣 Tell members"
 
-#: How a recorded intent reads back. The sheet stores the code; nothing else
-#: should spell these out, so a rename stays here.
+#: How a recorded intent reads back. The sheet holds the button labels above
+#: (`alliance_duel.INTENT_SHEET_WORDS`, #729); a rename of either button
+#: renames that word too, and a test holds the two together.
 INTENT_WORDS = {
     ad.INTENT_PUSH: "pushing to win",
     ad.INTENT_SAVE: "saving for a later week",
@@ -2009,11 +2015,12 @@ class PredictionsView(OwnedView):
             # first, so without this a correction silently reverts on the next
             # render and rule 7 reports both sides picked to win.
             #
-            # Written as "L" rather than blanked: `row_values` omits empty
-            # values on purpose, which is what makes the upsert non-clobbering,
-            # so there is no way to clear a cell and no reason to add one. "L"
-            # is a first-class Picked value that both `predicted_winner` and
-            # rule 7 already read, and it says the same thing.
+            # Written as "L" (the cell says "Lose") rather than blanked:
+            # `row_values` omits empty values on purpose, which is what makes
+            # the upsert non-clobbering, so there is no way to clear a Picked
+            # cell and no reason to add one. "L" is a first-class Picked value
+            # that both `predicted_winner` and rule 7 already read, and it says
+            # the same thing.
             #
             # Only on a correction, so the ordinary save still writes the one
             # row the design intends.

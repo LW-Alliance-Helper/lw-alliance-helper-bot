@@ -17,18 +17,22 @@ Flow:
      post-channel and prints a copyable code block in the leadership
      channel) and "Cancel".
 
-Assignments are persisted in the DS Assignments tab of the Google Sheet.
-Sheet structure:
-  Section headers in col A: DS_A_ZONES, DS_A_SUBS, DS_B_ZONES, DS_B_SUBS
-  Data rows follow each header (col A = zone/name, col B = members/sub)
+Assignments are persisted in the DS Assignments tab of the Google Sheet,
+shared with Canyon Storm: a table with columns Event, Team, Stage, Zone,
+Members (#729). See "The assignments tab as a table" below; the stacked
+pre-#729 layout still reads, and is converted on its first save.
 """
 
 import asyncio
 import json
 import os
 import re
+from dataclasses import dataclass, field
+
 import discord
 import config_health
+import sheet_format
+from sheet_words import Words
 from config import get_config
 from messages import HUB_TIMEOUT, NOT_SET_UP
 from storm_event_hub import HUB_COMMAND, HUB_BTN_DRAFT
@@ -163,88 +167,6 @@ config_health.register(
 )
 
 
-# The assignments tab holds up to six sections, in this order. Desert Storm
-# and Canyon Storm share it; each save rewrites only its own team's sections.
-_SECTION_HEADER_RE = re.compile(r"^(DS|CS)_[AB]_(ZONES|SUBS)$")
-_SECTION_ORDER = (
-    "DS_A_ZONES",
-    "DS_A_SUBS",
-    "DS_B_ZONES",
-    "DS_B_SUBS",
-    "CS_A_ZONES",
-    "CS_B_ZONES",
-)
-
-
-def _is_section_header(key: str) -> bool:
-    return bool(_SECTION_HEADER_RE.match(key))
-
-
-def _split_sections(rows: list[list[str]]) -> dict[str, list[list[str]]]:
-    """The tab's rows grouped under their section header, blank rows dropped.
-    Rows keep every cell as read, so a section nobody is saving is written
-    back exactly as it was."""
-    sections: dict[str, list[list[str]]] = {}
-    current = None
-    for row in rows:
-        key = row[0].strip() if row else ""
-        if _is_section_header(key):
-            current = key
-            sections[current] = []
-            continue
-        if current and any(str(c).strip() for c in row):
-            sections[current].append(list(row))
-    return sections
-
-
-def _ds_zone_rows(zones: dict) -> list[list[str]]:
-    return [[zone, members] for zone, members in zones.items()]
-
-
-def _ds_sub_rows(subs: list) -> list[list[str]]:
-    rows = []
-    for sub in subs:
-        # Flatten any transitional `(starter, sub)` tuple to the sub name only.
-        name = str(sub[1]) if isinstance(sub, tuple) and len(sub) >= 2 else str(sub)
-        if name:
-            rows.append([name])
-    return rows
-
-
-def _cs_zone_rows(zones: dict) -> list[list[str]]:
-    rows = []
-    for zone, members in zones.items():
-        if isinstance(members, list):
-            members = ", ".join(str(x) for x in members if x)
-        rows.append([zone, members])
-    return rows
-
-
-def _fill_missing_ds_team(sections: dict, team: str) -> None:
-    """A DS team with nothing saved is written with its defaults, as the
-    saves always have. A saved one is left exactly as it was."""
-    if not sections.get(f"DS_{team}_ZONES"):
-        default_zones, default_subs = DEFAULTS[team]
-        sections[f"DS_{team}_ZONES"] = _ds_zone_rows(dict(default_zones))
-        sections[f"DS_{team}_SUBS"] = _ds_sub_rows(list(default_subs))
-    sections.setdefault(f"DS_{team}_SUBS", [])
-
-
-def _write_sections(ws, previous: list[list[str]], sections: dict) -> None:
-    """Write the sections back in their fixed order, in one update that covers
-    the old contents: no clear() first, so a failed write can't leave the tab
-    empty (#678)."""
-    from config import cover_previous_extent
-
-    rows: list[list[str]] = []
-    for key in _SECTION_ORDER:
-        if key in sections:
-            rows.append([key, ""])
-            rows.extend(sections[key])
-            rows.append(["", ""])
-    ws.update("A1", cover_previous_extent(rows, previous), value_input_option="USER_ENTERED")
-
-
 def _assignments_worksheet(guild_id: int = None):
     from config import get_config
 
@@ -291,52 +213,14 @@ def load_ds_assignments(team: str, guild_id: int = None) -> tuple[dict, list]:
     tab name "DS Assignments" — preserves the legacy single-guild
     behavior for callers that haven't been migrated yet.
     """
-    zone_key = f"DS_{team}_ZONES"
-    sub_key = f"DS_{team}_SUBS"
-
     try:
         from config import get_config
 
         cfg = get_config(guild_id) if guild_id else None
         sh = _get_spreadsheet(guild_id)
         ws = sh.worksheet(cfg.tab_ds_assignments if cfg else "DS Assignments")
-        rows = ws.get_all_values()
-
-        zones = {}
-        subs = []
-        section = None
-
-        for row in rows:
-            if not row or not row[0].strip():
-                continue
-            key = row[0].strip()
-
-            if key == zone_key:
-                section = "zones"
-                continue
-            if key == sub_key:
-                section = "subs"
-                continue
-            # Stop at any other section's header, Canyon Storm's included:
-            # Team B's subs come last among the DS sections, and without the
-            # CS headers here they ran on into the CS rows below (#683).
-            if _is_section_header(key) and key not in (zone_key, sub_key):
-                section = None
-                continue
-
-            if section == "zones" and len(row) >= 2:
-                zones[key] = row[1].strip()
-            elif section == "subs":
-                # Sheet rows under DS_*_SUBS are one column post-#37 (just
-                # the sub name). Legacy two-column rows carried a starter
-                # in col A and the sub in col B — keep col B only since
-                # the starter wasn't the sub. Fall through to col A when
-                # col B is empty (single-column row from the new shape).
-                col_a = row[0].strip() if row else ""
-                col_b = row[1].strip() if len(row) >= 2 else ""
-                name = col_b or col_a
-                if name:
-                    subs.append(name)
+        tab = _parse_assignments(ws.get_all_values())
+        zones, subs = _ds_from_rows(tab.blocks.get(("DS", team), []))
 
         _note_assignments_ok(guild_id)
         if zones:
@@ -366,8 +250,9 @@ def load_ds_assignments(team: str, guild_id: int = None) -> tuple[dict, list]:
 def save_ds_assignments(team: str, zones: dict, subs: list, guild_id: int = None):
     """
     Save DS assignments for one team without affecting anything else on the
-    tab: the other DS team and both Canyon Storm teams are written back
-    exactly as they were read (#683).
+    tab: the other DS team and both Canyon Storm teams keep what they hold
+    (#683). A tab still in the stacked pre-#729 layout is rewritten as the
+    table, everything on it carried across.
 
     The tab is read once, and a failed read writes nothing (#678). The
     loaders fall back to defaults when a read fails, which is right for a
@@ -376,16 +261,12 @@ def save_ds_assignments(team: str, zones: dict, subs: list, guild_id: int = None
     `guild_id` resolves the per-guild spreadsheet + tab name; when
     omitted, falls back to env-var SPREADSHEET_ID and tab "DS Assignments".
     """
-    other = "B" if team == "A" else "A"
-
     try:
         ws = _assignments_worksheet(guild_id)
         previous = ws.get_all_values()
-        sections = _split_sections(previous)
-        _fill_missing_ds_team(sections, other)
-        sections[f"DS_{team}_ZONES"] = _ds_zone_rows(zones)
-        sections[f"DS_{team}_SUBS"] = _ds_sub_rows(subs)
-        _write_sections(ws, previous, sections)
+        tab = _parse_assignments(previous)
+        tab.replace("DS", team, _ds_rows(team, zones, subs))
+        _write_assignments(ws, previous, tab)
         print(f"[STORM] Team {team} assignments saved ({len(zones)} zones, {len(subs)} sub pairs)")
         _note_assignments_ok(guild_id)
 
@@ -1212,37 +1093,14 @@ CS_DEFAULTS = {"A": DEFAULT_CS_A, "B": DEFAULT_CS_B}
 
 
 def load_cs_assignments(team: str, guild_id: int = None) -> dict:
-    zone_key = f"CS_{team}_ZONES"
     try:
         from config import get_config
 
         cfg = get_config(guild_id)
         sh = _get_spreadsheet(guild_id)
         ws = sh.worksheet(cfg.tab_ds_assignments if cfg else "DS Assignments")
-        rows = ws.get_all_values()
-        zones = {}
-        section = None
-        for row in rows:
-            if not row or not row[0].strip():
-                continue
-            key = row[0].strip()
-            if key == zone_key:
-                section = "zones"
-                continue
-            if key.startswith("CS_") or key.startswith("DS_"):
-                if key != zone_key:
-                    section = None
-                    continue
-            if section == "zones" and len(row) >= 2:
-                raw = row[1].strip()
-                if key == CS_SUBS_KEY:
-                    # CS subs flatten to a list[str] in memory. Legacy
-                    # inline strings (commas / dashes / ampersands) split
-                    # via the shared helper so older saved data round-trips
-                    # cleanly with the new multi-line `Subs` template.
-                    zones[key] = _split_legacy_subs(raw) if raw else []
-                else:
-                    zones[key] = raw
+        tab = _parse_assignments(ws.get_all_values())
+        zones = _cs_from_rows(tab.blocks.get(("CS", team), []))
         _note_assignments_ok(guild_id)
         if zones:
             print(f"[STORM] Loaded CS Team {team} assignments ({len(zones)} zones)")
@@ -1263,19 +1121,15 @@ def load_cs_assignments(team: str, guild_id: int = None) -> dict:
 
 def save_cs_assignments(team: str, zones: dict, guild_id: int = None):
     """Save CS assignments for one team without affecting DS or the other CS
-    team: both are written back exactly as they were read. The tab is read
-    once, and a failed read writes nothing (#678, #683)."""
-    other = "B" if team == "A" else "A"
+    team: both keep what they hold, and a stacked pre-#729 tab is rewritten
+    as the table. The tab is read once, and a failed read writes nothing
+    (#678, #683)."""
     try:
         ws = _assignments_worksheet(guild_id)
         previous = ws.get_all_values()
-        sections = _split_sections(previous)
-        _fill_missing_ds_team(sections, "A")
-        _fill_missing_ds_team(sections, "B")
-        if not sections.get(f"CS_{other}_ZONES"):
-            sections[f"CS_{other}_ZONES"] = _cs_zone_rows(dict(CS_DEFAULTS[other]))
-        sections[f"CS_{team}_ZONES"] = _cs_zone_rows(zones)
-        _write_sections(ws, previous, sections)
+        tab = _parse_assignments(previous)
+        tab.replace("CS", team, _cs_rows(team, zones))
+        _write_assignments(ws, previous, tab)
         print(f"[STORM] CS Team {team} assignments saved ({len(zones)} zones)")
         _note_assignments_ok(guild_id)
     except Exception as e:
@@ -1326,6 +1180,277 @@ CS_SUBS_LABEL = "Subs"
 # Legacy label retained as a parser alias so older saved templates still
 # round-trip without manual reformatting.
 CS_SUBS_LEGACY_LABELS = {"pop pairs (last 30 sec)", "pop pairs"}
+
+
+# ── The assignments tab as a table (#729) ─────────────────────────────────────
+#
+# Desert Storm and Canyon Storm share one tab (`cfg.tab_ds_assignments`), laid
+# out as a table an officer can filter and sort: one header row, then one row
+# per zone assignment and one per sub.
+#
+#   Event         | Team | Stage | Zone          | Members
+#   Desert Storm  | A    |       | Nuclear Silo  | Alpha, Bravo
+#   Desert Storm  | A    |       | Subs          | Charlie
+#   Canyon Storm  | B    | 1     | Power Tower   | Delta
+#   Canyon Storm  | B    |       | Subs          | Echo
+#
+# Stage is Canyon Storm's alone: its zone names repeat across stages (Power
+# Tower, Data Center 1 ...), so the stage is what tells them apart. Desert
+# Storm leaves it blank. Canyon Storm zones are the game's names on the tab
+# and the internal keys (`s1_power_tower`) in memory; `_cs_key` maps back.
+#
+# Before #729 the tab was stacked sections under marker rows in column A
+# (`DS_A_ZONES`, `DS_A_SUBS`, ... `CS_B_ZONES`), with Canyon Storm rows keyed
+# by the internal keys. The readers still take that layout, and the first
+# save converts the whole tab to the table: the other event and the other
+# team come across as they were read.
+#
+# Columns an officer adds to the right of Members are kept, on the row they
+# were typed against, and a row the bot doesn't recognise as one of its own
+# (Event and Team not a storm and a team) is kept below the bot's rows.
+
+ASSIGNMENTS_HEADER = ("Event", "Team", "Stage", "Zone", "Members")
+_COL_EVENT, _COL_TEAM, _COL_STAGE, _COL_ZONE, _COL_MEMBERS = range(5)
+_WIDTH = len(ASSIGNMENTS_HEADER)
+SUBS_ZONE = "Subs"
+
+EVENT_WORDS = Words({"DS": "Desert Storm", "CS": "Canyon Storm"})
+TEAM_WORDS = Words({"A": "A", "B": "B"}, also={"team a": "A", "team b": "B"})
+
+# The bot's rows are written in this order on every save.
+_BLOCK_ORDER = (("DS", "A"), ("DS", "B"), ("CS", "A"), ("CS", "B"))
+
+ZONE_OPTIONS: tuple[str, ...] = tuple(
+    dict.fromkeys([*DS_ZONE_STRUCTURE, *(label for _, _, label in CS_ZONE_STRUCTURE), SUBS_ZONE])
+)
+ASSIGNMENTS_FORMAT = sheet_format.TabSpec(
+    text=(_COL_STAGE, _COL_ZONE, _COL_MEMBERS),
+    dropdowns=(
+        (_COL_EVENT, EVENT_WORDS.options),
+        (_COL_TEAM, TEAM_WORDS.options),
+        (_COL_STAGE, ("1", "2", "3")),
+        (_COL_ZONE, ZONE_OPTIONS),
+    ),
+)
+
+# The pre-#729 stacked layout's section markers.
+_SECTION_HEADER_RE = re.compile(r"^(DS|CS)_[AB]_(ZONES|SUBS)$")
+
+
+def _is_section_header(key: str) -> bool:
+    return bool(_SECTION_HEADER_RE.match(key))
+
+
+def _cell(row: list, idx: int) -> str:
+    return str(row[idx]).strip() if idx < len(row) else ""
+
+
+def _trim(cells: list) -> list:
+    """`cells` without the blanks a read pads the grid out with."""
+    out = list(cells)
+    while out and not str(out[-1]).strip():
+        out.pop()
+    return out
+
+
+@dataclass
+class _AssignmentsTab:
+    """The tab as read: the header to write back, the bot's rows by
+    (event, team), and every other row, kept as it was."""
+
+    header: list[str]
+    blocks: dict[tuple[str, str], list[list[str]]] = field(default_factory=dict)
+    others: list[list[str]] = field(default_factory=list)
+
+    def replace(self, event: str, team: str, rows: list[list[str]]) -> None:
+        """One event and team's rows, rewritten; the alliance's own columns
+        to the right stay on the row they were typed against."""
+        extras = {}
+        for row in self.blocks.get((event, team), []):
+            extras.setdefault(_row_identity(event, row), _trim(row[_WIDTH:]))
+        self.blocks[(event, team)] = [
+            row + extras.pop(_row_identity(event, row), []) for row in rows
+        ]
+
+
+def _parse_assignments(rows: list[list[str]]) -> _AssignmentsTab:
+    """The tab in either layout: the table, or the stacked sections from
+    before #729 (any marker row in column A)."""
+    if any(_is_section_header(_cell(row, 0)) for row in rows):
+        return _from_sections(rows)
+    previous = list(rows[0]) if rows else []
+    if EVENT_WORDS.code(_cell(previous, _COL_EVENT)) in ("DS", "CS"):
+        # The header row was deleted: the first row is an assignment.
+        previous, rows = [], [[], *rows]
+    header = list(ASSIGNMENTS_HEADER)
+    for idx, text in enumerate(previous[:_WIDTH]):
+        if str(text).strip():
+            header[idx] = text  # a header an officer renamed stays theirs
+    header.extend(_trim(previous[_WIDTH:]))
+    tab = _AssignmentsTab(header=header)
+    for row in rows[1:]:
+        if not any(str(c).strip() for c in row):
+            continue
+        key = (EVENT_WORDS.code(_cell(row, _COL_EVENT)), TEAM_WORDS.code(_cell(row, _COL_TEAM)))
+        if key in _BLOCK_ORDER:
+            tab.blocks.setdefault(key, []).append(list(row))
+        else:
+            tab.others.append(list(row))
+    return tab
+
+
+def _from_sections(rows: list[list[str]]) -> _AssignmentsTab:
+    """A stacked tab as table rows. A row the old readers skipped (outside
+    any section, or with column A blank) is kept as one of the others."""
+    tab = _AssignmentsTab(header=list(ASSIGNMENTS_HEADER))
+    current = None
+    for row in rows:
+        key = _cell(row, 0)
+        if _is_section_header(key):
+            current = key
+            continue
+        if not any(str(c).strip() for c in row):
+            continue
+        if current is None or not key:
+            tab.others.append(list(row))
+            continue
+        event, team, part = current.split("_")
+        extras = _trim(row[2:])
+        block = tab.blocks.setdefault((event, team), [])
+        if event == "DS" and part == "SUBS":
+            # One column since #37; a legacy row was `starter, sub`.
+            block.append(_ds_row(team, SUBS_ZONE, _cell(row, 1) or key) + extras)
+        elif event == "DS":
+            block.append(_ds_row(team, key, _cell(row, 1)) + extras)
+        else:
+            cs_rows = _cs_rows(team, {key: _cell(row, 1)})
+            block.extend([cs_rows[0] + extras, *cs_rows[1:]])
+    return tab
+
+
+def _write_assignments(ws, previous: list[list[str]], tab: _AssignmentsTab) -> None:
+    """Write the whole tab in one update that covers the old contents: no
+    clear() first, so a failed write can't leave the tab empty (#678). Then
+    the house style, once (#729)."""
+    from config import cover_previous_extent
+
+    rows = [tab.header]
+    for key in _BLOCK_ORDER:
+        for row in tab.blocks.get(key, []):
+            row = list(row)
+            row[_COL_EVENT] = EVENT_WORDS.reword(row[_COL_EVENT])
+            row[_COL_TEAM] = TEAM_WORDS.reword(row[_COL_TEAM])
+            rows.append(row)
+    rows.extend(tab.others)
+    ws.update("A1", cover_previous_extent(rows, previous), value_input_option="USER_ENTERED")
+    sheet_format.ensure_formatted(ws, ASSIGNMENTS_FORMAT)
+
+
+def _members_text(members) -> str:
+    if isinstance(members, list):
+        return ", ".join(str(x) for x in members if x)
+    return "" if members is None else str(members)
+
+
+def _ds_row(team: str, zone: str, members) -> list[str]:
+    return [EVENT_WORDS.word("DS"), team, "", zone, _members_text(members)]
+
+
+def _ds_rows(team: str, zones: dict, subs: list) -> list[list[str]]:
+    rows = [_ds_row(team, zone, members) for zone, members in zones.items()]
+    for sub in subs:
+        # Flatten any transitional `(starter, sub)` tuple to the sub name only.
+        name = str(sub[1]) if isinstance(sub, tuple) and len(sub) >= 2 else str(sub)
+        if name:
+            rows.append(_ds_row(team, SUBS_ZONE, name))
+    return rows
+
+
+def _cs_rows(team: str, zones: dict) -> list[list[str]]:
+    """A Canyon Storm team's rows. Subs go one name to a row, and a team
+    with none still gets its Subs row, so the zone reads back as empty."""
+    event = EVENT_WORDS.word("CS")
+    rows = []
+    for key, members in zones.items():
+        stage, zone = _cs_place(key)
+        if key == CS_SUBS_KEY:
+            names = members if isinstance(members, list) else _split_legacy_subs(members or "")
+            names = [str(n) for n in names if n] or [""]
+            rows.extend([event, team, stage, zone, name] for name in names)
+        else:
+            rows.append([event, team, stage, zone, _members_text(members)])
+    return rows
+
+
+def _cs_place(key: str) -> tuple[str, str]:
+    """(Stage, Zone) on the tab for a Canyon Storm key. A key that isn't
+    the game's is written as it is, with no stage."""
+    if key == CS_SUBS_KEY:
+        return "", SUBS_ZONE
+    for stage, k, label in CS_ZONE_STRUCTURE:
+        if k == key:
+            return str(stage), label
+    return "", key
+
+
+def _cs_key(stage: str, zone: str) -> str | None:
+    """The Canyon Storm key for a row's Stage and Zone, any case. The old
+    internal key reads too. A zone name only one stage has needs no stage;
+    one that isn't the game's reads as typed, for the draft's typo warning."""
+    zone = zone.strip()
+    low = zone.lower()
+    if not low:
+        return None
+    if low in (SUBS_ZONE.lower(), CS_SUBS_KEY) or low in CS_SUBS_LEGACY_LABELS:
+        return CS_SUBS_KEY
+    stage = re.sub(r"\D", "", stage)
+    matches = []
+    for s, key, label in CS_ZONE_STRUCTURE:
+        if low == key:
+            return key
+        if low == label.lower() and (not stage or str(s) == stage):
+            matches.append(key)
+    return matches[0] if len(matches) == 1 else zone
+
+
+def _row_identity(event: str, row: list) -> tuple:
+    """Which zone (or which sub) a row is, for carrying the alliance's own
+    columns across a rewrite."""
+    zone = _cell(row, _COL_ZONE)
+    key = _cs_key(_cell(row, _COL_STAGE), zone) if event == "CS" else zone.lower()
+    if key in (CS_SUBS_KEY, SUBS_ZONE.lower()):
+        return (SUBS_ZONE, _cell(row, _COL_MEMBERS).lower())
+    return (key,)
+
+
+def _ds_from_rows(rows: list[list[str]]) -> tuple[dict, list]:
+    """A Desert Storm team's zones (by zone name) and subs."""
+    zones, subs = {}, []
+    for row in rows:
+        zone, members = _cell(row, _COL_ZONE), _cell(row, _COL_MEMBERS)
+        if zone.lower() == SUBS_ZONE.lower():
+            if members:
+                subs.append(members)
+        elif zone:
+            zones[zone] = members
+    return zones, subs
+
+
+def _cs_from_rows(rows: list[list[str]]) -> dict:
+    """A Canyon Storm team's zones, by internal key. Subs flatten to a
+    list[str]; a cell holding several (the old shape) splits through the
+    shared helper."""
+    zones: dict = {}
+    for row in rows:
+        key = _cs_key(_cell(row, _COL_STAGE), _cell(row, _COL_ZONE))
+        if key is None:
+            continue
+        members = _cell(row, _COL_MEMBERS)
+        if key == CS_SUBS_KEY:
+            zones.setdefault(key, []).extend(_split_legacy_subs(members) if members else [])
+        else:
+            zones[key] = members
+    return zones
 
 
 def build_cs_template(z: dict) -> str:

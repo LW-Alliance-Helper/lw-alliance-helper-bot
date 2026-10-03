@@ -290,17 +290,14 @@ class TestStormAssignmentsWrite:
 
         time.sleep(1.0)
         rows = ws.get_all_values()
-        flat = [c for r in rows for c in r]
 
-        # Section headers
-        assert "DS_A_ZONES" in flat
-        assert "DS_A_SUBS" in flat
-        # Zone data
-        assert any("Nuclear Silo" == c for c in flat)
-        assert any("Alice, Bob" == c for c in flat)
-        # Sub data
-        assert any("Carol" == c for c in flat)
-        assert any("Dave" == c for c in flat)
+        # One table (#729): a header, then one row per zone and per sub.
+        assert rows[0][:5] == ["Event", "Team", "Stage", "Zone", "Members"]
+        body = [r[:5] for r in rows[1:] if any(r)]
+        assert ["Desert Storm", "A", "", "Nuclear Silo", "Alice, Bob"] in body
+        assert ["Desert Storm", "A", "", "Oil Refinery I", "Carol"] in body
+        # A legacy (starter, sub) tuple keeps only the sub.
+        assert ["Desert Storm", "A", "", "Subs", "Dave"] in body
 
     def test_save_cs_assignments_persists_zones(
         self,
@@ -328,11 +325,13 @@ class TestStormAssignmentsWrite:
 
         time.sleep(1.0)
         rows = ws.get_all_values()
-        flat = [c for r in rows for c in r]
 
-        assert "CS_A_ZONES" in flat
-        assert any("s1_power_tower" == c for c in flat)
-        assert any("Alice, Bob" == c for c in flat)
+        # The game's zone names with their stage, never the internal keys (#729).
+        assert rows[0][:5] == ["Event", "Team", "Stage", "Zone", "Members"]
+        body = [r[:5] for r in rows[1:] if any(r)]
+        assert ["Canyon Storm", "A", "1", "Power Tower", "Alice, Bob"] in body
+        assert ["Canyon Storm", "A", "2", "Defense System 1", "Carol, Dave"] in body
+        assert not any("s1_power_tower" in r for r in rows)
 
 
 # ── train.save_schedule ──────────────────────────────────────────────────────
